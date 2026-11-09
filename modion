@@ -1,0 +1,3 @@
+#!/bin/sh
+# Starts Modion with the system Electron.
+exec electron "$(dirname "$(readlink -f "$0")")" "$@"

@@ -1,0 +1,11 @@
+{
+  "name": "modion",
+  "productName": "Modion",
+  "version": "0.1.0",
+  "description": "A Minecraft mod manager for Linux that browses and installs from Modrinth and CurseForge",
+  "main": "main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron ."
+  }
+}
