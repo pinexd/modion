@@ -5,7 +5,8 @@
 // Modion never sees a password and never shows a Microsoft page itself.
 //
 // Needs the client ID of an app registration that Mojang has approved for the
-// Minecraft API; until then the last step answers 403 and says so.
+// Minecraft API (an unapproved one gets a 403 at the last step). Modion's own is below;
+// it is a public identifier, not a secret: native apps have no client secret.
 
 const fs = require('fs');
 const path = require('path');
@@ -16,6 +17,7 @@ const { ApiError, UA } = require('./http');
 const AUTHORITY = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const SCOPE = 'XboxLive.signin offline_access';
 const SIGN_IN_WINDOW_MS = 5 * 60 * 1000;
+const CLIENT_ID = 'ee08d77d-0ca1-4003-b8ac-93565703d141';
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const XBOX_PROBLEMS = {
@@ -97,7 +99,7 @@ class Account {
 
   // Opens the browser and resolves once the whole chain has produced a Minecraft profile.
   async signIn(clientId) {
-    if (!GUID.test(clientId || '')) throw new ApiError('Add your Microsoft application (client) ID first.', 'NO_CLIENT_ID');
+    if (!GUID.test(clientId || '')) throw new ApiError('The Microsoft application (client) ID is not valid.', 'NO_CLIENT_ID');
     this.cancel();
     const verifier = b64url(crypto.randomBytes(48));
     const state = b64url(crypto.randomBytes(24));
@@ -206,7 +208,8 @@ class Account {
 
     const mc = await call('https://api.minecraftservices.com/authentication/login_with_xbox', { json: { identityToken: `XBL3.0 x=${claims.uhs};${xsts.body.Token}` } });
     if (mc.status === 403) {
-      throw new ApiError('Microsoft and Xbox sign-in worked, but Minecraft refused this application ID. It has not been approved for the Minecraft API yet.', 'NOT_APPROVED');
+      throw new ApiError('Microsoft and Xbox sign-in worked, but Minecraft refused this application ID. It has not been approved for the Minecraft API (a new approval can take a while to take effect).'
+        + (mc.body.errorMessage || mc.body.error ? ` Minecraft said: ${String(mc.body.errorMessage || mc.body.error).slice(0, 200)}` : ''), 'NOT_APPROVED');
     }
     if (!mc.ok || !mc.body.access_token) throw new ApiError(`Minecraft sign-in failed (${mc.status}).`, 'MC_AUTH');
 
@@ -245,4 +248,4 @@ class Account {
   }
 }
 
-module.exports = { Account, GUID };
+module.exports = { Account, GUID, CLIENT_ID };

@@ -892,8 +892,8 @@ function viewLibrary(v) {
 let signingIn = false; // a Microsoft sign-in is waiting on the browser
 
 function viewSettings(v) {
-  const key = h('input', { class: 'field', type: 'password', placeholder: S.cfg.hasCurseforgeKey ? 'A key is saved. Paste a new one to replace it.' : 'Paste your CurseForge API key', spellcheck: false, autocomplete: 'off' });
-  const status = h('p', { class: S.cfg.hasCurseforgeKey ? 'label' : '' }, S.cfg.hasCurseforgeKey ? 'CurseForge is connected.' : 'CurseForge is not connected yet.');
+  const key = h('input', { class: 'field', type: 'password', placeholder: S.cfg.ownCurseforgeKey ? 'A key is saved. Paste a new one to replace it.' : 'Paste your CurseForge API key', spellcheck: false, autocomplete: 'off' });
+  const status = h('p', { class: S.cfg.hasCurseforgeKey ? 'label' : '' }, !S.cfg.hasCurseforgeKey ? 'CurseForge is not connected yet.' : S.cfg.ownCurseforgeKey ? 'CurseForge is connected with your own key.' : 'CurseForge is connected with the key that came with Modion. You can use your own instead.');
   const save = btn('Save Key', async () => {
     if (!key.value.trim()) return;
     save.disabled = true;
@@ -905,7 +905,7 @@ function viewSettings(v) {
     } catch (e) { fail(e, 'Key not saved'); }
     if (S.view === 'settings') render();
   }, 'green');
-  const forget = S.cfg.hasCurseforgeKey && btn('Forget Key', async () => {
+  const forget = S.cfg.ownCurseforgeKey && btn('Forget Key', async () => {
     try { setConfig(await api('config.setCurseforgeKey', { key: '' })); invalidateResults(); } catch (e) { fail(e); }
     if (S.view === 'settings') render();
   });
@@ -913,7 +913,7 @@ function viewSettings(v) {
 
   // Minecraft account: sign-in happens in the system browser; this panel only starts it and shows the result.
   const who = S.cfg.account;
-  const clientId = h('input', { class: 'field', value: S.cfg.msClientId || '', placeholder: '00000000-0000-0000-0000-000000000000', spellcheck: false, maxLength: 60 });
+  const clientId = h('input', { class: 'field', value: S.cfg.msClientId || '', placeholder: 'Modion\'s own application ID', spellcheck: false, maxLength: 60 });
   const act = async (call, title) => {
     try { setConfig(await call); } catch (e) { if (e.code !== 'CANCELLED') fail(e, title); }
     signingIn = false;
@@ -925,7 +925,6 @@ function viewSettings(v) {
     : who
       ? btn('Sign Out', () => act(api('account.signOut'), 'Could not sign out'))
       : btn('Sign In with Microsoft', () => { signingIn = true; render(); act(api('account.signIn'), 'Sign-in failed'); }, 'green');
-  if (!who && !signingIn && !S.cfg.msClientId) signIn.disabled = true;
 
   // How Play starts the game.
   const mode = S.cfg.launchMode || 'prism';
@@ -950,11 +949,14 @@ function viewSettings(v) {
       h('p', { class: 'label' }, 'Starting directly works for vanilla, Fabric and Quilt on Minecraft 1.19 and newer. Other instances always use the launcher that owns them; the line under the Play button says which.')),
     h('div', { class: 'panel' },
       h('h2', {}, 'Minecraft account'),
-      h('p', {}, 'Signing in needs the application (client) ID of your own Microsoft app registration, approved for the Minecraft API. The sign-in page opens in your web browser; Modion never sees your password.'),
-      h('div', { class: 'bar' }, clientId, saveId),
+      h('p', {}, 'Sign in with the Microsoft account that owns Minecraft: Java Edition. The sign-in page opens in your web browser; Modion never sees your password.'),
       h('p', {}, signingIn ? 'Waiting for you to finish signing in in your browser...' : who ? `Signed in as ${who.name}.` : 'Not signed in.'),
       h('div', { class: 'bar' }, signIn),
-      h('p', { class: 'label' }, 'In the app registration, add the redirect URI http://localhost under "Mobile and desktop applications". Once signed in, choose "Directly, with my Microsoft account" above to have Play start the game itself.')),
+      who && mode !== 'account' && h('p', { class: 'label' }, 'Choose "Directly, with my Microsoft account" above to have Play start the game itself.'),
+      h('details', {},
+        h('summary', { class: 'label' }, 'Use a different application ID'),
+        h('p', { class: 'label' }, 'For developers: the client ID of your own Microsoft app registration, approved for the Minecraft API, with the redirect URI http://localhost under "Mobile and desktop applications". Leave empty to use Modion\'s own. Changing it signs you out.'),
+        h('div', { class: 'bar' }, clientId, saveId))),
     h('div', { class: 'panel' },
       h('h2', {}, 'CurseForge API key'),
       h('p', {}, 'Modrinth works out of the box. CurseForge only answers apps that send an API key, so browsing it needs your own (free) key from ',

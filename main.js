@@ -12,7 +12,9 @@ const curseforge = require('./src/curseforge');
 const instances = require('./src/instances');
 const content = require('./src/content');
 const launcher = require('./src/launcher');
-const { Account, GUID } = require('./src/account');
+const { Account, GUID, CLIENT_ID } = require('./src/account');
+// The application ID used for sign-in: Modion's own, unless Settings names another.
+const clientId = () => store.config.msClientId || CLIENT_ID;
 const game = require('./src/game');
 const modpack = require('./src/modpack');
 const webinstall = require('./src/webinstall');
@@ -118,6 +120,7 @@ function publicConfig() {
     account: account.status(),
     activeInstanceId,
     hasCurseforgeKey: curseforge.hasKey(),
+    ownCurseforgeKey: Boolean(store.config.curseforgeKey), // false while the key that came with Modion is in use
     installed: content.installedIds(store),
     version: require('./package.json').version,
   };
@@ -176,6 +179,14 @@ function gameFolder(dir) {
   return Object.values(content.FOLDER).includes(path.basename(dir)) ? path.dirname(dir) : dir;
 }
 
+// A CurseForge key that ships with a packaged copy of Modion: the file curseforge.key next
+// to this one. It is never committed (see .gitignore); a key saved in Settings wins over it.
+const builtinKey = (() => {
+  if (process.env.MODION_HEADLESS) return '';
+  try { return fs.readFileSync(path.join(__dirname, 'curseforge.key'), 'utf8').trim().slice(0, 200); } catch { return ''; }
+})();
+const fallbackKey = () => builtinKey || process.env.CURSEFORGE_API_KEY || '';
+
 const methods = {
   'config.get': () => publicConfig(),
 
@@ -191,7 +202,7 @@ const methods = {
         throw e;
       }
     }
-    curseforge.setKey(next);
+    curseforge.setKey(next || fallbackKey());
     store.config.curseforgeKey = next;
     store.saveConfig();
     return publicConfig();
@@ -256,12 +267,13 @@ const methods = {
   'account.setClientId': (a) => {
     const next = text(a.clientId, 60);
     if (next && !GUID.test(next)) throw new ApiError('That is not an application (client) ID. It looks like 00000000-0000-0000-0000-000000000000.', 'BAD_REQUEST');
-    if (next !== store.config.msClientId) account.signOut(); // a sign-in belongs to the ID it was made with
-    store.config.msClientId = next;
+    const before = clientId();
+    store.config.msClientId = next === CLIENT_ID ? '' : next;
+    if (clientId() !== before) account.signOut(); // a sign-in belongs to the ID it was made with
     store.saveConfig();
     return publicConfig();
   },
-  'account.signIn': async () => { await account.signIn(store.config.msClientId); return publicConfig(); },
+  'account.signIn': async () => { await account.signIn(clientId()); return publicConfig(); },
   'account.cancel': () => { account.cancel(); return publicConfig(); },
   'account.signOut': () => { account.signOut(); return publicConfig(); },
 
@@ -444,7 +456,7 @@ const methods = {
     if (!instances.isDir(inst.path)) throw new ApiError(`The folder for "${inst.name}" no longer exists: ${inst.path}`, 'NO_FOLDER');
     const how = howToLaunch(inst);
     if (how && how.direct) {
-      const session = how.direct === 'account' ? await account.gameSession(store.config.msClientId) : game.offlineSession(store.config.offlineName);
+      const session = how.direct === 'account' ? await account.gameSession(clientId()) : game.offlineSession(store.config.offlineName);
       await game.launch(inst, session, emit);
       return { label: 'Modion', play: true };
     }
@@ -563,7 +575,7 @@ const ready = !first ? Promise.resolve(null) : app.whenReady().then(() => {
     seal: keyring ? (s) => safeStorage.encryptString(s).toString('base64') : null,
     open: keyring ? (s) => safeStorage.decryptString(Buffer.from(s, 'base64')) : null,
   });
-  curseforge.setKey(store.config.curseforgeKey || process.env.CURSEFORGE_API_KEY || '');
+  curseforge.setKey(store.config.curseforgeKey || fallbackKey());
   Menu.setApplicationMenu(null);
 
   ipcMain.handle('modion', async (event, method, args) => {

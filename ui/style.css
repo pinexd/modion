@@ -313,3 +313,7 @@ a { color: var(--link); cursor: pointer; }
 .form .bar { justify-content: flex-end; }
 #overlay.lightbox { background: rgba(0, 0, 0, .9); cursor: zoom-out; }
 #overlay.lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+.settings details { margin-top: 10px; }
+.settings summary { cursor: pointer; }
+.settings details .bar { margin-top: 8px; }

@@ -1,0 +1,83 @@
+# Run by hand: Actions tab -> Release -> Run workflow.
+# Packs Modion into a tarball and opens a release for it. With "draft" left on, the release
+# is not public until you press Publish on it, so the notes can be written or polished in
+# GitHub's release editor first.
+#
+# If the repository has a secret named CURSEFORGE_KEY, it is placed in the package as
+# curseforge.key so the release works with CurseForge out of the box. It is never committed.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag, for example v0.1.0'
+        required: true
+      title:
+        description: 'Release title (defaults to "Modion <tag>")'
+        required: false
+      notes:
+        description: 'Release notes (Markdown). Leave empty to write them on the draft.'
+        required: false
+      draft:
+        description: 'Create as a draft to review before publishing'
+        type: boolean
+        default: true
+      prerelease:
+        description: 'Mark as a pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+      TITLE: ${{ inputs.title }}
+      NOTES: ${{ inputs.notes }}
+      DRAFT: ${{ inputs.draft }}
+      PRERELEASE: ${{ inputs.prerelease }}
+      CURSEFORGE_KEY: ${{ secrets.CURSEFORGE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
+            echo "::error::The tag must look like v0.1.0"; exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::A release named $TAG already exists"; exit 1
+          fi
+
+      - name: Check the code
+        run: for f in main.js preload.js src/*.js ui/*.js; do node --check "$f"; done
+
+      - name: Pack
+        run: |
+          dir="modion-${TAG#v}"
+          mkdir "$dir"
+          cp -r main.js preload.js package.json modion install-desktop-entry.sh README.md src ui assets "$dir/"
+          [ -f LICENSE ] && cp LICENSE "$dir/"
+          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${TAG#v}\"/" "$dir/package.json"
+          if [ -n "$CURSEFORGE_KEY" ]; then
+            (umask 077; printf '%s\n' "$CURSEFORGE_KEY" > "$dir/curseforge.key")
+            chmod 644 "$dir/curseforge.key"
+          else
+            echo "::warning::No CURSEFORGE_KEY secret is set; this release ships without a CurseForge key."
+          fi
+          tar -czf "$dir.tar.gz" "$dir"
+          sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+          echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Create the release
+        run: |
+          printf '%s\n' "$NOTES" > notes.md
+          args=(--target "$GITHUB_SHA" --title "${TITLE:-Modion $TAG}" --notes-file notes.md)
+          [ "$DRAFT" = "true" ] && args+=(--draft)
+          [ "$PRERELEASE" = "true" ] && args+=(--prerelease)
+          gh release create "$TAG" "$ASSET" "$ASSET.sha256" "${args[@]}"

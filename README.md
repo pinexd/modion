@@ -25,7 +25,7 @@ Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step
 - **Instances** – the picker in the bottom-left. "Detect Launchers" finds game folders from
   the Minecraft Launcher, Prism Launcher / MultiMC / PolyMC and the Modrinth App (native or
   Flatpak), including their game version and mod loader. Any folder can be added by hand.
-- **New Instance / Play** – Modion does not sign in to Minecraft or download the game itself.
+- **New Instance / Play** – By default Modion leaves the game to Prism Launcher.
   "New Instance..." writes a Prism Launcher instance (game version + Fabric, Quilt, Forge or
   NeoForge), and the Play button in the bottom bar asks Prism to launch it, with the account
   and Java that Prism already manages. Instances owned by other launchers get an
@@ -34,11 +34,12 @@ Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step
   CurseForge zip; the latter needs your CurseForge API key), and rename, delete or open the
   folder of instances Modion made. Instances added from other launchers can be selected and
   forgotten, never renamed or deleted.
-- **Direct launching (in progress)** – Modion can also start the game itself (vanilla, Fabric
+- **Direct launching** – Modion can also start the game itself (vanilla, Fabric
   and Quilt on 1.19+), downloading the game, assets and Java from Mojang into
-  `~/.local/share/modion`. In normal use this needs a Microsoft sign-in (Settings), which
-  depends on an application ID approved for the Minecraft API. Settings has a "Starting the
-  game" choice between Prism Launcher and starting directly. An offline mode exists for
+  `~/.local/share/modion`. This needs a Microsoft sign-in (Settings, "Sign In
+  with Microsoft"): the sign-in page opens in your own web browser and Modion receives the
+  result on a one-shot `http://localhost` listener, never your password. Settings has a
+  "Starting the game" choice between Prism Launcher and starting directly. An offline mode exists for
   developing the launch code; it is locked to the developer's own computer and does not
   appear anywhere else.
 - **Browse** – pick Modrinth or CurseForge in the sidebar, a content type in the tabs. Results
@@ -55,6 +56,16 @@ CurseForge only serves apps that send an API key. Get a free one at
 third-party downloads for their project. For those files Modion opens the file's page on
 curseforge.com in a separate window; you press Download there, and Modion puts the file in
 the instance. With a key set, mods installed from one site also show as installed on the other.
+
+Released packages can carry a key of their own: a file named `curseforge.key` next to
+`main.js` is used when no key is saved in Settings. That file is never committed; the
+release workflow writes it from the repository secret `CURSEFORGE_KEY`.
+
+## Releases
+
+Actions → Release → Run workflow, with a version tag (`v0.1.0`), and optionally a title and
+notes. It packs a tarball and opens a release, as a draft by default so the notes can be
+finished in GitHub's editor before publishing.
 
 ## Layout
 
