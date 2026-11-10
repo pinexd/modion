@@ -59,6 +59,11 @@ files in `%LOCALAPPDATA%\ModionApp`.
   relocate one with everything in it, or remove it from the list. An instance carries its
   identity in its `instance.json`, so a library moved by hand is recognised when its new
   folder is added. Such instances also have a **Move** button on the Instances page.
+- **Instance settings** – the Settings button on an instance (Instances page): which Java to
+  use (automatic, one found on the computer, or one you browse to), a memory slider, extra
+  Java arguments and environment variables. They apply when Modion starts the game itself.
+  If the Java arguments contain `-Xmx` or `-Xms`, those decide the memory and the slider is
+  switched off.
 - **Browse** – pick Modrinth or CurseForge in the sidebar, a content type in the tabs. Results
   are filtered to the active instance's version and loader.
 - **Project page** – description, gallery and file list. *Install* takes the newest file that
@@ -93,6 +98,8 @@ finished in GitHub's editor before publishing.
 | `src/content.js` | Downloads (checksum-verified), dependencies, library management |
 | `src/instances.js` | Launcher detection |
 | `src/launcher.js` | Creating Prism instances and starting the game through Prism |
+| `src/java.js` | Finding the Java installations on the computer |
+| `src/platform.js` | Folders and names that differ between Linux and Windows |
 | `src/libraries.js` | Instance libraries: the folders of Modion's own instances |
 | `src/game.js` | Downloading and starting the game directly |
 | `src/account.js` | Microsoft sign-in |

@@ -1147,6 +1147,97 @@ function renameInstance(i) {
   input.select();
 }
 
+// Per-instance settings for when Modion starts the game: which Java, how much memory,
+// extra Java arguments and environment variables.
+async function instanceSettings(i) {
+  let info;
+  try { info = await api('instances.settings', { id: i.id }); } catch (e) { fail(e, 'Could not open the settings'); return; }
+  const st = info.settings;
+  const mb = (n) => (n >= 1024 && n % 1024 === 0 ? `${n / 1024} GB` : `${n} MB`);
+  const usesOwnMemory = (line) => /(^|\s)["']?-Xm[xs]/.test(line);
+
+  // Java: automatic, one of those found on this computer, or one picked by hand.
+  const javaList = [...info.javas];
+  if (st.java && !javaList.some((j) => j.path === st.java)) javaList.unshift({ path: st.java, version: '', major: 0, source: 'saved' });
+  let java = st.java;
+  const javaLabel = (j) => `${j.major ? `Java ${j.major}` : 'Java'}${j.version ? ` (${j.version})` : ''}, ${j.source}: ${j.path}`;
+  const javaRow = h('div', { class: 'bar' });
+  const drawJava = () => fill(javaRow,
+    select([['', info.wantedJava ? `Automatic (Java ${info.wantedJava})` : 'Automatic'], ...javaList.map((j) => [j.path, javaLabel(j)])], java, (v) => { java = v; drawJava(); }),
+    btn('Browse...', async () => {
+      try {
+        const found = await api('instances.pickJava');
+        if (!found) return;
+        if (!javaList.some((j) => j.path === found.path)) javaList.unshift(found);
+        java = found.path;
+        drawJava();
+      } catch (e) { fail(e, 'Java not chosen'); }
+    }));
+  drawJava();
+  const picked = () => javaList.find((j) => j.path === java);
+  const javaNote = h('p', { class: 'label' });
+  const drawJavaNote = () => {
+    const j = picked();
+    javaNote.textContent = !java
+      ? 'Modion picks a Java of the version the game asks for, downloading Mojang\'s own if none is installed.'
+      : info.wantedJava && j && j.major && j.major !== info.wantedJava
+        ? `This version of the game asks for Java ${info.wantedJava}; the one chosen is Java ${j.major}. It may not start.`
+        : 'The game will be started with exactly this Java.';
+    javaNote.className = java && info.wantedJava && picked() && picked().major && picked().major !== info.wantedJava ? 'label gold' : 'label';
+  };
+  javaRow.addEventListener('change', drawJavaNote);
+  javaRow.addEventListener('click', () => setTimeout(drawJavaNote, 0));
+  drawJavaNote();
+
+  // Memory: a slider, unless the Java arguments below set it themselves.
+  const max = Math.max(1024, Math.floor(info.totalMemory / 256) * 256);
+  let auto = st.memory === null;
+  const slider = h('input', { type: 'range', class: 'range', min: 512, max, step: 256, value: st.memory || info.defaultMemory });
+  const amount = h('span', { class: 'gold' });
+  const autoBox = check(`Automatic (${mb(info.defaultMemory)})`, auto, (on) => { auto = on; drawMemory(); });
+  const memoryNote = h('p', { class: 'label' });
+  const args = h('textarea', { class: 'field area', rows: 3, spellcheck: false, placeholder: '-XX:+UseG1GC -Dexample=value', value: st.jvmArgs });
+  const env = h('textarea', { class: 'field area', rows: 3, spellcheck: false, placeholder: 'NAME=value, one per line', value: st.env });
+  const drawMemory = () => {
+    const own = usesOwnMemory(args.value);
+    slider.disabled = own || auto;
+    autoBox.querySelector('input').disabled = own;
+    amount.textContent = own ? 'set by the Java arguments' : mb(auto ? info.defaultMemory : Number(slider.value));
+    memoryNote.textContent = own
+      ? 'The Java arguments below contain -Xmx or -Xms, so they decide the memory. Remove those from the arguments to use the slider.'
+      : 'The most memory the game may use. More is not always better: leave some for the rest of the computer.';
+    memoryNote.className = own ? 'label gold' : 'label';
+  };
+  slider.addEventListener('input', drawMemory);
+  args.addEventListener('input', drawMemory);
+  drawMemory();
+
+  const save = async () => {
+    try {
+      setConfig(await api('instances.setSettings', {
+        id: i.id, java, jvmArgs: args.value, env: env.value,
+        memory: auto || usesOwnMemory(args.value) ? null : Number(slider.value),
+      }));
+      closeScreen();
+      toast('Settings saved', i.name);
+    } catch (e) { fail(e, 'Settings not saved'); }
+  };
+  showScreen(`Settings: ${i.name}`,
+    h('div', { class: 'screen-body' },
+      !info.direct && h('div', { class: 'bar warn' }, info.startedBy
+        ? `These settings apply when Modion starts the game itself. Right now this instance is started through ${info.startedBy}, which has its own settings.`
+        : 'These settings apply when Modion starts the game itself, which it cannot do for this instance with the current launch setting.'),
+      h('div', { class: 'settings in-screen' },
+        h('div', { class: 'panel' }, h('h2', {}, 'Java'), javaRow, javaNote),
+        h('div', { class: 'panel' }, h('h2', {}, 'Memory'),
+          h('div', { class: 'bar' }, slider, amount), h('div', { class: 'bar' }, autoBox), memoryNote),
+        h('div', { class: 'panel' }, h('h2', {}, 'Java arguments'), args,
+          h('p', { class: 'label' }, 'Added after Modion\'s own arguments, so they take precedence. Put quotes around a value that contains spaces.')),
+        h('div', { class: 'panel' }, h('h2', {}, 'Environment variables'), env,
+          h('p', { class: 'label' }, 'Set for the game only, in addition to the ones Modion itself runs with.')))),
+    [btn('Cancel', closeScreen), btn('Save', save, 'green')], render);
+}
+
 function viewInstances(v) {
   if (S.instancesTab === 'log') {
     const inst = activeInst();
@@ -1198,6 +1289,7 @@ function viewInstances(v) {
       h('div', { class: 'row-actions' },
         select,
         btn('Open Folder', () => api('instances.openFolder', { id: i.id }).catch(fail), 'small'),
+        btn('Settings', () => instanceSettings(i), 'small'),
         i.managed && btn('Rename', () => renameInstance(i), 'small'),
         i.movable && move,
         i.managed

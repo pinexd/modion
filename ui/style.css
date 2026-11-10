@@ -319,3 +319,14 @@ a { color: var(--link); cursor: pointer; }
 .settings details .bar { margin-top: 8px; }
 
 .settings .list { flex: none; overflow: visible; margin: 8px 0; border: 1px solid var(--line); }
+
+/* ---------- instance settings ---------- */
+.settings.in-screen { width: 100%; padding: 18px 24px; overflow: visible; }
+.settings.in-screen .bar { padding: 0; border: 0; background: none; margin: 8px 0; }
+.settings.in-screen .bar .sel { flex: 1; min-width: 0; }
+.settings.in-screen .bar .sel select { width: 100%; }
+.field.area { width: 100%; resize: vertical; min-height: 64px; font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; user-select: text; }
+.range { flex: 1; accent-color: #1bd96a; height: 24px; }
+.range:disabled { opacity: .35; }
+p.label.gold { color: var(--gold, #ffd75e); }
+.screen-body > .bar.warn { padding: 10px 24px; background: #4a3a12; color: #ffd98a; }

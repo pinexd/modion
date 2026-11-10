@@ -26,6 +26,13 @@ class Store {
           loader: typeof i.loader === 'string' ? i.loader : '',
           // Set on instances Modion created or imported: `home` is the folder it may rename and delete.
           ...(i.managed === true && typeof i.home === 'string' && i.home ? { managed: true, home: i.home } : {}),
+          // How Modion starts this instance's game, where the person changed it from the defaults.
+          ...(isObject(i.settings) ? { settings: {
+            memory: Number.isInteger(i.settings.memory) && i.settings.memory > 0 ? i.settings.memory : null, // MB; null = automatic
+            jvmArgs: typeof i.settings.jvmArgs === 'string' ? i.settings.jvmArgs : '',
+            env: typeof i.settings.env === 'string' ? i.settings.env : '',
+            java: typeof i.settings.java === 'string' ? i.settings.java : '', // '' = automatic
+          } } : {}),
         })),
       activeInstanceId: typeof config.activeInstanceId === 'string' ? config.activeInstanceId : null,
       curseforgeKey: typeof config.curseforgeKey === 'string' ? config.curseforgeKey : '',

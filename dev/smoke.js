@@ -493,6 +493,33 @@ require('../main.js').ready.then(async (win) => {
     await js(`api('instances.setActive', { id: '${foreign}' }).then((c) => { setConfig(c); go('browse'); })`);
   });
 
+  await step('instance settings: Java, memory slider, arguments and environment', async () => {
+    await js(`go('instances')`);
+    const id = await js(`S.cfg.instances[0].id`);
+    const call = (method, args = {}) => js(`window.modion.call('${method}', ${JSON.stringify(args)})`);
+    const info = (await call('instances.settings', { id })).data;
+    expect(info && info.settings.memory === null && info.totalMemory > 1024 && Array.isArray(info.javas), `settings info: ${JSON.stringify(info).slice(0, 200)}`);
+    await js(`[...document.querySelectorAll('#view .row')[0].querySelectorAll('.btn')].find(b => b.textContent === 'Settings').click()`);
+    await waitFor(`document.querySelector('#overlay .range')`, 'settings screen');
+    expect(await js(`document.querySelector('#overlay .range').disabled`), 'the slider is not off while memory is automatic');
+    await js(`(() => { const a = document.querySelectorAll('#overlay textarea')[0]; a.value = '-Xmx3G -Dx="a b"'; a.dispatchEvent(new Event('input')); })()`);
+    expect(await js(`document.querySelector('#overlay .range').disabled && /Remove those/.test(document.querySelector('#overlay').textContent)`), 'the slider is not greyed out with a note when the arguments set -Xmx');
+    await js(`(() => { const a = document.querySelectorAll('#overlay textarea')[0]; a.value = '-Dx="a b"'; a.dispatchEvent(new Event('input')); document.querySelector('#overlay .check input').click(); })()`);
+    expect(!(await js(`document.querySelector('#overlay .range').disabled`)), 'the slider did not come back');
+    await js(`(() => { const r = document.querySelector('#overlay .range'); r.value = 2048; r.dispatchEvent(new Event('input')); document.querySelectorAll('#overlay textarea')[1].value = 'MODION_TEST=1\\nOTHER=a=b'; })()`);
+    await shot('18-instance-settings');
+    await js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === 'Save').click()`);
+    await waitFor(`document.querySelector('#overlay').hidden`, 'settings saved');
+    const saved = await js(`S.cfg.instances[0].settings`);
+    expect(saved && saved.memory === 2048 && saved.jvmArgs === '-Dx="a b"' && saved.env === 'MODION_TEST=1\nOTHER=a=b' && saved.java === '', `saved settings: ${JSON.stringify(saved)}`);
+    expect((await call('instances.setSettings', { id, memory: 64 })).code === 'BAD_REQUEST', 'too little memory was accepted');
+    expect((await call('instances.setSettings', { id, memory: null, env: 'not a variable' })).code === 'BAD_REQUEST', 'a bad environment line was accepted');
+    expect((await call('instances.setSettings', { id, memory: null, java: '/bin/sh' })).code === 'BAD_JAVA', 'a Java nobody offered was accepted');
+    const cleared = await call('instances.setSettings', { id, memory: null, jvmArgs: '', env: '', java: '' });
+    expect(cleared.ok && !cleared.data.instances[0].settings, 'default settings were not cleared');
+    await js(`api('config.get').then((c) => setConfig(c))`);
+  });
+
   await step('category filter, filter-mismatch warning, and back/forward buttons', async () => {
     await js(`go('browse')`);
     await waitFor(`S.browse.results && document.querySelectorAll('#view .bar select')[0].options.length > 8`, 'category menu');

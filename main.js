@@ -13,6 +13,7 @@ const instances = require('./src/instances');
 const content = require('./src/content');
 const launcher = require('./src/launcher');
 const libraries = require('./src/libraries');
+const javas = require('./src/java');
 const { Account, GUID, CLIENT_ID } = require('./src/account');
 // The application ID used for sign-in: Modion's own, unless Settings names another.
 const clientId = () => store.config.msClientId || CLIENT_ID;
@@ -31,6 +32,8 @@ const HEADLESS = Boolean(process.env.MODION_HEADLESS);
 let store, win, account;
 // Folders the user was shown by detection or picked in a dialog; only these may become instances.
 const offered = new Set();
+// Likewise for Java programs: only ones found on this computer or picked in a dialog may be set.
+const offeredJava = new Set();
 
 const emit = (data) => {
   if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('download', data);
@@ -619,6 +622,54 @@ const methods = {
     }
     swap();
     return { config: publicConfig(), moved };
+  },
+
+  // What the instance settings screen shows: the saved settings and what there is to choose from.
+  'instances.settings': (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    const found = javas.detect(game.ROOT);
+    found.forEach((j) => offeredJava.add(j.path));
+    const how = howToLaunch(inst);
+    return {
+      settings: { memory: null, jvmArgs: '', env: '', java: '', ...inst.settings },
+      javas: found,
+      wantedJava: game.wantedJava(inst.gameVersion),
+      totalMemory: Math.floor(require('os').totalmem() / 2 ** 20),
+      defaultMemory: game.defaultMemory(),
+      // The settings only take effect when Modion starts the game itself.
+      direct: Boolean(how && how.direct),
+      startedBy: how ? how.label : null,
+    };
+  },
+
+  'instances.pickJava': async () => {
+    const pick = await dialog.showOpenDialog(liveWindow(), { title: `Choose the Java program (${javas.EXE})`, properties: ['openFile', 'showHiddenFiles'] });
+    if (pick.canceled || !pick.filePaths[0]) return null;
+    const found = await javas.probe(path.resolve(pick.filePaths[0]));
+    if (!found) throw new ApiError('That file did not answer like a Java program.', 'BAD_JAVA');
+    offeredJava.add(found.path);
+    return found;
+  },
+
+  'instances.setSettings': (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    const total = Math.floor(require('os').totalmem() / 2 ** 20);
+    const memory = a.memory === null || a.memory === undefined ? null : Math.floor(Number(a.memory));
+    if (memory !== null && !(memory >= 512 && memory <= total)) throw new ApiError(`Memory has to be between 512 MB and this computer's ${total} MB.`, 'BAD_REQUEST');
+    const java = text(a.java, 4096);
+    const kept = inst.settings && inst.settings.java === java;
+    if (java && !kept && (!offeredJava.has(java) || !require('./src/platform').isFile(java))) throw new ApiError('That Java is not available.', 'BAD_JAVA');
+    const lines = (v, max) => (typeof v === 'string' ? v.replace(/\r/g, '').slice(0, max) : '');
+    const env = lines(a.env, 8000);
+    const bad = env.split('\n').find((l) => l.trim() && !/^\s*[A-Za-z_][A-Za-z0-9_]*=/.test(l));
+    if (bad) throw new ApiError(`Environment variables are written NAME=value, one per line. This line is not: ${bad.slice(0, 60)}`, 'BAD_REQUEST');
+    const next = { memory, jvmArgs: lines(a.jvmArgs, 8000).replace(/\n/g, ' ').trim(), env: env.trim(), java };
+    if (next.memory === null && !next.jvmArgs && !next.env && !next.java) delete inst.settings;
+    else inst.settings = next;
+    store.saveConfig();
+    return publicConfig();
   },
 
   'instances.rename': (a) => {

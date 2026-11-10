@@ -421,7 +421,9 @@ async function prepare(inst, progress) {
   }
 
   // Java first: its progress is reported on its own, then the game files as one total.
-  const java = await findJava(game.javaVersion, progress);
+  // A Java chosen in the instance's settings is used as it is, if it is still there.
+  const chosen = inst.settings && inst.settings.java;
+  const java = chosen && platform.isFile(chosen) ? chosen : await findJava(game.javaVersion, progress);
   await fetchAll([client, ...libs.values(), ...extras.map((e) => e.item), ...jarMods, ...gameLib, ...nativeJars.map((n) => n.item), ...assets.values()], progress);
 
   const natives = path.join(ROOT, 'natives', crypto.createHash('sha1').update(inst.path).digest('hex').slice(0, 12));
@@ -525,14 +527,17 @@ function launchArgs({ game, profile, classpath, natives, gameAssets, logging, jv
   // Up to 1.12.2 the game's own arguments are one line of text, and the Java ones are implied.
   const words = (line) => String(line || '').split(/\s+/).filter(Boolean).map(fill);
   const modern = Boolean(game.arguments);
-  const memory = Math.max(2, Math.min(4, Math.floor(os.totalmem() / 2 ** 30 / 2)));
+  const own = inst.settings || {};
+  const memory = own.memory || defaultMemory();
   return [
-    `-Xmx${memory}G`, '-Xms512M',
+    // The memory setting, unless the instance's own Java arguments already say.
+    ...(setsMemory(own.jvmArgs) ? [] : [`-Xmx${memory}M`, `-Xms${Math.min(512, memory)}M`]),
     '-Dlog4j2.formatMsgNoLookups=true',
     ...(logging ? [logging] : []),
     ...(modern ? expand(game.arguments.jvm) : [`-Djava.library.path=${natives}`, '-cp', values.classpath]),
     ...expand(profile && profile.arguments && profile.arguments.jvm),
     ...jvm,
+    ...splitArgs(own.jvmArgs), // the instance's own Java arguments go last, so they win
     (profile && profile.mainClass) || game.mainClass,
     // A loader may replace the game's argument line with its own (Forge from 1.13 on does).
     ...(profile && profile.gameLine ? words(profile.gameLine) : modern ? expand(game.arguments.game) : words(game.minecraftArguments)),
@@ -548,6 +553,38 @@ const running = new Set(); // instance paths being prepared or just started
 const live = new Set();    // instance paths whose game, started from here, is still open
 // Is the game for this folder being started or running (as far as this session knows)?
 const inUse = (gameDir) => running.has(gameDir) || live.has(gameDir);
+
+// "-Xmx2G -Dname="two words"" -> ['-Xmx2G', '-Dname=two words']
+function splitArgs(line) {
+  const out = [];
+  String(line || '').replace(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g, (word) => { out.push(word.replace(/"([^"]*)"|'([^']*)'/g, (m, a, b) => a ?? b)); return ''; });
+  return out;
+}
+
+// "NAME=value" lines -> { NAME: 'value' }; anything else is ignored.
+function parseEnv(text) {
+  const env = {};
+  for (const line of String(text || '').split('\n')) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (m) env[m[1]] = m[2].replace(/\r$/, '');
+  }
+  return env;
+}
+
+// Do these Java arguments set the memory themselves? Then the memory setting stays out of it.
+const setsMemory = (line) => splitArgs(line).some((a) => /^-Xm[xs]/.test(a));
+// What Modion gives the game when nothing is chosen: half the computer's memory, 2 to 4 GB.
+const defaultMemory = () => Math.max(2, Math.min(4, Math.floor(os.totalmem() / 2 ** 30 / 2))) * 1024;
+
+// Which Java the game's metadata asks for, if that version has been looked at before.
+function wantedJava(gameVersion) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(ROOT, 'versions', gameVersion, `${gameVersion}.json`), 'utf8')).javaVersion;
+    return Number(j && j.majorVersion) || 8;
+  } catch {
+    return null;
+  }
+}
 
 // session: { name, uuid, token, offline? }. Resolves once the game process has stayed up
 // for a few seconds; a crash on startup is reported with the end of its log.
@@ -576,7 +613,7 @@ async function launch(inst, session, emit) {
     const log = fs.openSync(logFile, 'w');
     let child;
     try {
-      child = require('child_process').spawn(ready.java, args, { cwd: inst.path, env: { ...process.env, ...ready.env }, detached: true, windowsHide: true, stdio: ['ignore', log, log] });
+      child = require('child_process').spawn(ready.java, args, { cwd: inst.path, env: { ...process.env, ...ready.env, ...parseEnv(inst.settings && inst.settings.env) }, detached: true, windowsHide: true, stdio: ['ignore', log, log] });
     } finally {
       fs.closeSync(log);
     }
@@ -607,4 +644,4 @@ function offlineSession(name) {
   return { name, uuid: h.toString('hex'), token: '0', offline: true };
 }
 
-module.exports = { supports, launch, inUse, outputLog, offlineSession, fetchAll, versionJson, ROOT };
+module.exports = { splitArgs, parseEnv, setsMemory, defaultMemory, wantedJava, supports, launch, inUse, outputLog, offlineSession, fetchAll, versionJson, ROOT };
