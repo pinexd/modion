@@ -982,7 +982,7 @@ function viewSettings(v) {
       h('p', {}, modeNote),
       h('div', { class: 'bar' }, check('Show the game log when the game is started', S.cfg.openLogOnLaunch !== false,
         (on) => act(api('settings.setOpenLog', { on }), 'Setting not saved'))),
-      h('p', { class: 'label' }, 'Starting directly works for vanilla, Fabric and Quilt on Minecraft 1.19 and newer. Other instances always use the launcher that owns them; the line under the Play button says which.')),
+      h('p', { class: 'label' }, 'Starting directly works for vanilla, Fabric and Quilt, back to Minecraft 1.0. Other instances always use the launcher that owns them; the line under the Play button says which.')),
     h('div', { class: 'panel' },
       h('h2', {}, 'Instance libraries'),
       h('p', {}, mode === 'prism'

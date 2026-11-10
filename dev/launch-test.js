@@ -1,7 +1,7 @@
 'use strict';
 // Really starts Minecraft (offline test session) in a throwaway game folder, waits for it to
 // get going, then stops it:   node dev/launch-test.js [gameVersion] [loader]
-// The first run downloads the game, assets and Java into ~/.local/share/modion.
+// The first run downloads the game, assets and Java into ~/.local/share/ModionApp.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -26,18 +26,23 @@ let shown = 0;
     process.exit(1);
   }
   console.log(`started pid ${started.pid} after ${Math.round((Date.now() - t) / 1000)}s`);
-  // Wait until the game has clearly got past startup, then stop it.
-  const want = loader ? /Loading Minecraft .* with (Fabric|Quilt) Loader/ : /Setting user: ModionTest/;
-  let log = '', ok = false, alive = true;
-  for (let i = 0; i < 90 && alive; i++) {
+  // Wait until the game has clearly got past startup, then stop it. Old versions log
+  // little, so for them "the graphics and sound libraries came up and it kept running" counts.
+  const loaderLine = { fabric: /with Fabric Loader/, quilt: /with Quilt Loader|Quilt Loader/, forge: /Forge Mod Loader|MinecraftForge|ModLauncher|FML/i, neoforge: /NeoForge|ModLauncher|FML/i }[loader];
+  const reached = /Backend library|OpenAL initialized|Sound engine started|Created: \d+x\d+|LWJGL Version|Starting up SoundSystem|Initializing LWJGL OpenAL/;
+  const broken = /Exception in thread "main"|---- Minecraft Crash Report ----|Could not find or load main class/;
+  let log = '', ok = false, alive = true, since = 0;
+  for (let i = 0; i < 150 && alive; i++) {
     await sleep(1000);
     log = fs.readFileSync(started.log, 'utf8');
-    ok = want.test(log) && /Setting user: ModionTest/.test(log) && /Backend library|OpenAL initialized|Sound engine started|Created: \d+x\d+/.test(log);
+    try { log += fs.readFileSync(path.join(dir, 'logs', 'latest.log'), 'utf8'); } catch {}
     try { process.kill(started.pid, 0); } catch { alive = false; }
-    if (ok) break;
+    if (broken.test(log)) break;
+    if (reached.test(log) && (!loaderLine || loaderLine.test(log))) since++;
+    if (since >= 5 && alive) { ok = true; break; } // still up five seconds after getting there
   }
   try { process.kill(-started.pid, 'SIGTERM'); } catch { try { process.kill(started.pid, 'SIGTERM'); } catch {} }
-  const lines = log.split('\n').filter((l) => /Setting user|Loader|Backend library|ERROR|Exception|Created:/.test(l)).slice(0, 8);
+  const lines = log.split('\n').filter((l) => /Setting user|Loader|Backend library|LWJGL Version|ERROR|Exception|Error|Created:/.test(l)).slice(0, 10);
   console.log(lines.map((l) => '  ' + l.slice(0, 160)).join('\n'));
   console.log(ok ? `ok   Minecraft ${gameVersion}${loader ? ' + ' + loader : ''} started and reached the game` : `FAIL did not reach the game (process ${alive ? 'still running' : 'exited'})`);
   await sleep(1500);

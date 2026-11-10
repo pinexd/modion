@@ -99,20 +99,13 @@ async function index(uid) {
   return versions;
 }
 
-async function components(gameVersion, loader, loaderVersion) {
-  if (!(await index('net.minecraft')).some((v) => v.version === gameVersion)) {
-    throw new ApiError(`Prism Launcher does not offer Minecraft ${gameVersion}.`, 'NO_GAME_VERSION');
-  }
-  const list = [{ uid: 'net.minecraft', version: gameVersion, important: true }];
-  if (!loader) return list;
-
-  const name = LOADER_NAME[loader];
-  const missing = new ApiError(`${name} is not available for Minecraft ${gameVersion}.`, 'NO_LOADER_VERSION');
+// Which build of a loader goes with a game version, as Prism's metadata service has it.
+async function loaderBuild(loader, gameVersion, loaderVersion) {
+  const missing = new ApiError(`${LOADER_NAME[loader]} is not available for Minecraft ${gameVersion}.`, 'NO_LOADER_VERSION');
   let builds = await index(LOADER_UID[loader]);
   if (loader === 'fabric' || loader === 'quilt') {
     // These loaders are not tied to a game version; the mappings ("intermediary") are.
     if (!(await index('net.fabricmc.intermediary')).some((v) => v.version === gameVersion)) throw missing;
-    list.push({ uid: 'net.fabricmc.intermediary', version: gameVersion, dependencyOnly: true });
   } else {
     builds = builds.filter((v) => arr(v.requires).some((r) => r && r.uid === 'net.minecraft' && r.equals === gameVersion));
   }
@@ -121,7 +114,21 @@ async function components(gameVersion, loader, loaderVersion) {
   const pick = builds.find((v) => loaderVersion && v.version === loaderVersion)
     || builds.find((v) => v.recommended) || builds.find((v) => !v.type || v.type === 'release') || builds[0];
   if (!pick) throw missing;
-  list.push({ uid: LOADER_UID[loader], version: pick.version });
+  return pick.version;
+}
+
+// The full description of one loader build (libraries, main class, arguments).
+const loaderMeta = (loader, version) => getJson(`${META}/${LOADER_UID[loader]}/${encodeURIComponent(version)}.json`);
+
+async function components(gameVersion, loader, loaderVersion) {
+  if (!(await index('net.minecraft')).some((v) => v.version === gameVersion)) {
+    throw new ApiError(`Prism Launcher does not offer Minecraft ${gameVersion}.`, 'NO_GAME_VERSION');
+  }
+  const list = [{ uid: 'net.minecraft', version: gameVersion, important: true }];
+  if (!loader) return list;
+  const version = await loaderBuild(loader, gameVersion, loaderVersion);
+  if (loader === 'fabric' || loader === 'quilt') list.push({ uid: 'net.fabricmc.intermediary', version: gameVersion, dependencyOnly: true });
+  list.push({ uid: LOADER_UID[loader], version });
   return list;
 }
 
@@ -210,4 +217,4 @@ async function create({ name, gameVersion, loader, loaderVersion }) {
   }
 }
 
-module.exports = { canCreate, describe, launch, create, createOwn, rename, cleanName, prismRoots };
+module.exports = { canCreate, describe, launch, create, createOwn, rename, cleanName, prismRoots, loaderBuild, loaderMeta };

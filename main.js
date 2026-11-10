@@ -154,7 +154,7 @@ async function makeInstance(spec) {
     return launcher.create(spec);
   }
   if (!game.supports(spec)) {
-    throw new ApiError('Modion can only start vanilla, Fabric and Quilt on Minecraft 1.19 and newer itself. For this one, set "Starting the game" in Settings to Prism Launcher and create it there.', 'UNSUPPORTED');
+    throw new ApiError('Modion cannot start Forge or NeoForge itself yet. For this one, set "Starting the game" in Settings to Prism Launcher and create it there.', 'UNSUPPORTED');
   }
   await game.versionJson(spec.gameVersion); // fails for a version Mojang does not have
   return launcher.createOwn(spec, libraries.usable(store.config.newInstanceDir));

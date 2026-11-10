@@ -3,9 +3,10 @@
 // from Mojang's own servers into a shared folder, builds the launch command from the
 // version's metadata, and runs it in the instance's game folder.
 //
-// Covers vanilla, Fabric and Quilt on Minecraft 1.19 and newer. Older versions (which need
-// native libraries unpacked) and Forge/NeoForge (which need their installers run) are not
-// handled here and keep going through the launcher that owns the instance.
+// Covers vanilla from 1.0 on, and Fabric and Quilt wherever those loaders exist. Versions
+// before 1.19 need native libraries unpacked; versions before 1.13 describe their launch
+// command in an older format; versions before 1.7.3 keep their assets as plain files.
+// Forge/NeoForge (which need their installers run) are not handled here yet.
 
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -14,6 +15,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { getJson, ApiError, arr } = require('./http');
 const { download } = require('./content');
+const { openZip } = require('./zip');
 
 const ROOT = require('./libraries').APP_DATA; // ~/.local/share/ModionApp
 const MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
@@ -134,7 +136,11 @@ async function findJava(wanted, progress) {
     const full = inside(home, rel);
     if (f.type === 'directory') await fsp.mkdir(full, { recursive: true });
     else if (f.type === 'link' && typeof f.target === 'string') links.push([full, f.target]);
-    else if (f.type === 'file' && f.downloads && f.downloads.raw) {
+    else if (f.type === 'file' && f.downloads && f.downloads.raw && f.downloads.raw.size === 0) {
+      // Some runtimes contain files that are meant to be empty; there is nothing to download.
+      await fsp.mkdir(path.dirname(full), { recursive: true });
+      await fsp.writeFile(full, '');
+    } else if (f.type === 'file' && f.downloads && f.downloads.raw) {
       items.push({ url: f.downloads.raw.url, sha1: f.downloads.raw.sha1, size: f.downloads.raw.size, dir: path.dirname(full), filename: path.basename(full), mode: f.executable ? 0o755 : 0o644 });
     }
   }
@@ -149,17 +155,72 @@ async function findJava(wanted, progress) {
   return java;
 }
 
+// Old versions keep native code (LWJGL and friends) in separate jars that have to be unpacked
+// into a folder the game is pointed at. Unpacked afresh for each start.
+async function unpackNatives(jars, dir) {
+  await fsp.rm(dir, { recursive: true, force: true });
+  await fsp.mkdir(dir, { recursive: true });
+  for (const { file, exclude } of jars) {
+    const zip = openZip(file);
+    try {
+      for (const entry of zip.entries.values()) {
+        if (entry.name.endsWith('/') || exclude.some((x) => entry.name.startsWith(x))) continue;
+        const full = inside(dir, entry.name);
+        await fsp.mkdir(path.dirname(full), { recursive: true });
+        await fsp.writeFile(full, zip.read(entry));
+      }
+    } finally {
+      zip.close();
+    }
+  }
+}
+
+// Versions before 1.7.3 read their sounds and language files by name, not through the
+// asset index: from <game folder>/resources (up to 1.5.2) or from one shared folder.
+async function legacyAssets(index, id, gameDir) {
+  if (!index.virtual && !index.map_to_resources) return null;
+  const dir = index.map_to_resources ? path.join(gameDir, 'resources') : path.join(ROOT, 'assets', 'virtual', id);
+  for (const [name, o] of Object.entries(index.objects || {})) {
+    if (!o || !/^[0-9a-f]{40}$/.test(o.hash)) continue;
+    const to = inside(dir, name);
+    let have = null;
+    try { have = await fsp.stat(to); } catch {}
+    if (have && have.size === o.size) continue;
+    await fsp.mkdir(path.dirname(to), { recursive: true });
+    await fsp.copyFile(path.join(ROOT, 'assets', 'objects', o.hash.slice(0, 2), o.hash), to);
+  }
+  return dir;
+}
+
+// Mojang's logging setup for the version. It matters for more than looks: for 1.7 to 1.18
+// it is what closes the Log4Shell hole. Mojang's file prints the console output as XML for
+// its own launcher, so the copy Modion uses prints it as plain lines instead.
+async function loggingConfig(game) {
+  const spec = game.logging && game.logging.client;
+  const f = spec && spec.file;
+  if (!f || !f.url || typeof spec.argument !== 'string' || !/^[\w.-]+\.xml$/.test(String(f.id))) return null;
+  const dir = path.join(ROOT, 'assets', 'log_configs');
+  await fetchAll([{ url: f.url, sha1: f.sha1, size: f.size, dir, filename: f.id }], () => {});
+  const xml = await fsp.readFile(path.join(dir, f.id), 'utf8');
+  const pattern = xml.match(/<PatternLayout\b[^>]*\/>/);
+  const plain = pattern ? xml.replace(/<(?:Legacy)?XMLLayout\s*\/>/g, pattern[0]) : xml;
+  const file = path.join(dir, `plain-${f.id}`);
+  await fsp.writeFile(file, plain);
+  return spec.argument.replace('${path}', file);
+}
+
 // Everything needed to start this instance, downloading what is missing.
 async function prepare(inst, progress) {
   if (process.arch !== 'x64') throw new ApiError('Direct launching is only set up for 64-bit Intel/AMD Linux so far.', 'UNSUPPORTED');
   const game = await versionJson(inst.gameVersion);
-  if (!game.arguments || !game.downloads || !game.downloads.client || !game.assetIndex) {
-    throw new ApiError(`Minecraft ${inst.gameVersion} is too old for Modion to start directly (1.19 and newer work).`, 'UNSUPPORTED');
+  if ((!game.arguments && typeof game.minecraftArguments !== 'string') || !game.downloads || !game.downloads.client || !game.assetIndex) {
+    throw new ApiError(`Mojang's description of Minecraft ${inst.gameVersion} is not one Modion can start.`, 'UNSUPPORTED');
   }
   const profile = inst.loader ? await loaderProfile(inst.loader, inst.gameVersion) : null;
 
   const libDir = path.join(ROOT, 'libraries');
   const libs = new Map(); // "group:artifact[:classifier]" -> item; the loader's choice of a library wins
+  const nativeJars = [];  // jars of native code to unpack (versions before 1.19)
   const add = (name, item) => { const [g, a, , c] = String(name).split(':'); const key = `${g}:${a}${c ? `:${c}` : ''}`; if (!libs.has(key)) libs.set(key, item); };
   for (const lib of arr(profile && profile.libraries)) {
     if (!lib || !lib.name) continue;
@@ -169,11 +230,21 @@ async function prepare(inst, progress) {
   }
   for (const lib of arr(game.libraries)) {
     if (!lib || !allowed(lib.rules)) continue;
-    if (lib.natives) throw new ApiError(`Minecraft ${inst.gameVersion} is too old for Modion to start directly (1.19 and newer work).`, 'UNSUPPORTED');
     const a = lib.downloads && lib.downloads.artifact;
-    if (!a || !a.url || !a.path) continue;
-    const full = inside(libDir, a.path);
-    add(lib.name, { url: a.url, sha1: a.sha1, size: a.size, dir: path.dirname(full), filename: path.basename(full) });
+    if (a && a.url && a.path) {
+      const full = inside(libDir, a.path);
+      add(lib.name, { url: a.url, sha1: a.sha1, size: a.size, dir: path.dirname(full), filename: path.basename(full) });
+    }
+    const key = lib.natives && typeof lib.natives.linux === 'string' ? lib.natives.linux.replace('${arch}', '64') : null;
+    const n = key && lib.downloads && lib.downloads.classifiers && lib.downloads.classifiers[key];
+    if (n && n.url && n.path) {
+      const full = inside(libDir, n.path);
+      nativeJars.push({
+        item: { url: n.url, sha1: n.sha1, size: n.size, dir: path.dirname(full), filename: path.basename(full) },
+        file: full,
+        exclude: arr(lib.extract && lib.extract.exclude).filter((x) => typeof x === 'string' && x),
+      });
+    }
   }
 
   const versionDir = path.join(ROOT, 'versions', inst.gameVersion);
@@ -196,19 +267,23 @@ async function prepare(inst, progress) {
 
   // Java first: its progress is reported on its own, then the game files as one total.
   const java = await findJava(game.javaVersion, progress);
-  await fetchAll([client, ...libs.values(), ...assets.values()], progress);
+  await fetchAll([client, ...libs.values(), ...nativeJars.map((n) => n.item), ...assets.values()], progress);
+
+  const natives = path.join(ROOT, 'natives', crypto.createHash('sha1').update(inst.path).digest('hex').slice(0, 12));
+  await unpackNatives(nativeJars, natives);
+  const gameAssets = await legacyAssets(index, game.assetIndex.id, inst.path);
+  const logging = await loggingConfig(game);
 
   const classpath = [...[...libs.values()].map((l) => path.join(l.dir, l.filename)), path.join(versionDir, client.filename)];
-  return { game, profile, java, classpath };
+  return { game, profile, java, classpath, natives, gameAssets, logging };
 }
 
-function launchArgs({ game, profile, classpath }, inst, session) {
-  const natives = path.join(ROOT, 'natives', crypto.createHash('sha1').update(inst.path).digest('hex').slice(0, 12));
-  fs.mkdirSync(natives, { recursive: true });
+function launchArgs({ game, profile, classpath, natives, gameAssets, logging }, inst, session) {
   const values = {
     auth_player_name: session.name,
     auth_uuid: session.uuid,
     auth_access_token: session.token,
+    auth_session: `token:${session.token}:${session.uuid}`, // what versions before 1.7 are given
     auth_xuid: '',
     clientid: '',
     user_type: session.offline ? 'legacy' : 'msa',
@@ -217,6 +292,7 @@ function launchArgs({ game, profile, classpath }, inst, session) {
     version_type: game.type || 'release',
     game_directory: inst.path,
     assets_root: path.join(ROOT, 'assets'),
+    game_assets: gameAssets || path.join(ROOT, 'assets'),
     assets_index_name: game.assetIndex.id,
     natives_directory: natives,
     launcher_name: 'modion',
@@ -229,13 +305,18 @@ function launchArgs({ game, profile, classpath }, inst, session) {
     if (!a || !allowed(a.rules)) return [];
     return (Array.isArray(a.value) ? a.value : [a.value]).filter((v) => typeof v === 'string').map(fill);
   });
+  // Up to 1.12.2 the game's own arguments are one line of text, and the Java ones are implied.
+  const words = (line) => String(line || '').split(/\s+/).filter(Boolean).map(fill);
+  const modern = Boolean(game.arguments);
   const memory = Math.max(2, Math.min(4, Math.floor(os.totalmem() / 2 ** 30 / 2)));
   return [
     `-Xmx${memory}G`, '-Xms512M',
-    ...expand(game.arguments.jvm),
+    '-Dlog4j2.formatMsgNoLookups=true',
+    ...(logging ? [logging] : []),
+    ...(modern ? expand(game.arguments.jvm) : [`-Djava.library.path=${natives}`, '-cp', values.classpath]),
     ...expand(profile && profile.arguments && profile.arguments.jvm),
     (profile && profile.mainClass) || game.mainClass,
-    ...expand(game.arguments.game),
+    ...(modern ? expand(game.arguments.game) : words(game.minecraftArguments)),
     ...expand(profile && profile.arguments && profile.arguments.game),
   ];
 }

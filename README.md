@@ -35,7 +35,7 @@ Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step
   folder of instances Modion made. Instances added from other launchers can be selected and
   forgotten, never renamed or deleted.
 - **Direct launching** – Modion can also start the game itself (vanilla, Fabric
-  and Quilt on 1.19+), downloading the game, assets and Java from Mojang into
+  and Quilt, back to Minecraft 1.0), downloading the game, assets and Java from Mojang into
   `~/.local/share/ModionApp`. This needs a Microsoft sign-in (Settings, "Sign In
   with Microsoft"): the sign-in page opens in your own web browser and Modion receives the
   result on a one-shot `http://localhost` listener, never your password. Settings has a
