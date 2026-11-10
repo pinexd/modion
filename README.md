@@ -30,6 +30,13 @@ Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step
   NeoForge), and the Play button in the bottom bar asks Prism to launch it, with the account
   and Java that Prism already manages. Instances owned by other launchers get an
   "Open Launcher" button instead.
+- **Direct launching (in progress)** – Modion can also start the game itself (vanilla, Fabric
+  and Quilt on 1.19+), downloading the game, assets and Java from Mojang into
+  `~/.local/share/modion`. In normal use this needs a Microsoft sign-in (Settings), which
+  depends on an application ID approved for the Minecraft API. Settings has a "Starting the
+  game" choice between Prism Launcher and starting directly. An offline mode exists for
+  developing the launch code; it is locked to the developer's own computer and does not
+  appear anywhere else.
 - **Browse** – pick Modrinth or CurseForge in the sidebar, a content type in the tabs. Results
   are filtered to the active instance's version and loader.
 - **Project page** – description, gallery and file list. *Install* takes the newest file that
@@ -51,7 +58,9 @@ third-party downloads for their project; those files get a "Website Only" button
 | `src/modrinth.js`, `src/curseforge.js` | API clients, normalised to one shape |
 | `src/content.js` | Downloads (checksum-verified), dependencies, library management |
 | `src/instances.js` | Launcher detection |
-| `src/launcher.js` | Creating Prism instances and starting the game |
+| `src/launcher.js` | Creating Prism instances and starting the game through Prism |
+| `src/game.js` | Downloading and starting the game directly |
+| `src/account.js` | Microsoft sign-in |
 | `ui/` | The interface; `markdown.js` renders and sanitises project descriptions |
 | `dev/smoke.js` | End-to-end check: `MODION_HEADLESS=1 electron dev/smoke.js out-dir` |
 

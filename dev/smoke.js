@@ -297,6 +297,24 @@ require('../main.js').ready.then(async (win) => {
     await js(`api('instances.setActive', { id: S.cfg.instances[0].id }).then((c) => { setConfig(c); render(); })`); // back to the test folder
   });
 
+  await step('the launch setting decides what Play does, and says so', async () => {
+    const label = () => js(`api('config.get').then((c) => (c.instances[0].launch || {}).label || 'none')`);
+    const set = (args) => js(`window.modion.call('settings.setLaunch', ${JSON.stringify(args)}).then((r) => (r.ok ? 'OK' : r.code))`);
+    expect(await js(`S.cfg.launchMode`) === 'prism' && await label() === 'none', `default is not Prism: ${await label()}`);
+    expect(await set({ mode: 'account' }) === 'OK' && await label() === 'none', 'account mode without a sign-in must not start the game directly');
+    if (await js(`S.cfg.offlineAllowed`)) {
+      expect(await set({ mode: 'offline', offlineName: 'no' }) === 'BAD_REQUEST', 'a bad player name was accepted');
+      expect(await set({ mode: 'offline', offlineName: '' }) === 'OK' && await label() === 'none', 'offline mode without a name must not start the game');
+      expect(await set({ mode: 'offline', offlineName: 'Tester_1' }) === 'OK' && await label() === 'Modion, offline as Tester_1', `offline label: ${await label()}`);
+      await js(`api('config.get').then((c) => { setConfig(c); go('settings'); })`);
+      await shot('14-launch-setting');
+    } else {
+      expect(await set({ mode: 'offline', offlineName: 'Tester_1' }) === 'FORBIDDEN', 'offline mode is selectable on a machine that is not the developer\'s');
+    }
+    expect(await set({ mode: 'nonsense' }) === 'OK' && await js(`api('config.get').then((c) => c.launchMode)`) === 'prism', 'an unknown mode did not fall back to Prism');
+    await js(`api('config.get').then((c) => { setConfig(c); go('browse'); })`);
+  });
+
   await step('curseforge without a key explains itself', async () => {
     await js(`go('browse')`);
     await js(`[...document.querySelectorAll('.nav-item')].find(b => b.textContent === 'CurseForge').click()`);

@@ -13,6 +13,7 @@ const instances = require('./src/instances');
 const content = require('./src/content');
 const launcher = require('./src/launcher');
 const { Account, GUID } = require('./src/account');
+const game = require('./src/game');
 
 const INDEX = path.join(__dirname, 'ui', 'index.html');
 const sources = { modrinth, curseforge };
@@ -59,15 +60,47 @@ const filter = (a) => ({
   loader: oneOf(a.loader, LOADERS, ''),
 });
 
+// Offline launching exists for developing the launch pipeline, so it is locked to the
+// developer's own computer: the option only appears where a hash of the system's machine
+// ID matches this value. Everywhere else, starting the game directly requires signing in.
+const OFFLINE_MACHINE = 'd7fa531aef498fec78dd4c870a3d9929f82345598772a9d5b4957afdc854e254';
+const offlineAllowed = (() => {
+  try {
+    const id = fs.readFileSync('/etc/machine-id', 'utf8').trim();
+    return Boolean(id) && crypto.createHash('sha256').update(`modion-offline:${id}`).digest('hex') === OFFLINE_MACHINE;
+  } catch {
+    return false;
+  }
+})();
+const PLAYER_NAME = /^\w{3,16}$/;
+
+// What Play will do for this instance under the chosen setting. Anything the chosen way
+// cannot handle (not signed in, a Forge instance, an old version) falls back to the
+// launcher that owns the instance, and the label always says which it will be.
+function howToLaunch(inst) {
+  const mode = store.config.launchMode;
+  if (game.supports(inst)) {
+    if (mode === 'offline' && offlineAllowed && PLAYER_NAME.test(store.config.offlineName)) {
+      return { direct: 'offline', play: true, label: `Modion, offline as ${store.config.offlineName}` };
+    }
+    if (mode === 'account' && account.status()) return { direct: 'account', play: true, label: `Modion as ${account.status().name}` };
+  }
+  const how = launcher.describe(inst.path);
+  return how ? { direct: null, play: how.play, label: how.label } : null;
+}
+
 function publicConfig() {
   const { instances: list, activeInstanceId } = store.config;
   return {
     // `launch` says how each instance can be started: { play, label }, or null when it cannot.
     instances: list.map((i) => {
-      const how = launcher.describe(i.path);
+      const how = howToLaunch(i);
       return { ...i, launch: how ? { play: how.play, label: how.label } : null };
     }),
     canCreate: launcher.canCreate(),
+    launchMode: store.config.launchMode,
+    offlineName: store.config.offlineName,
+    offlineAllowed,
     msClientId: store.config.msClientId,
     account: account.status(),
     activeInstanceId,
@@ -108,6 +141,17 @@ const methods = {
     }
     curseforge.setKey(next);
     store.config.curseforgeKey = next;
+    store.saveConfig();
+    return publicConfig();
+  },
+
+  'settings.setLaunch': (a) => {
+    const mode = oneOf(a.mode, ['prism', 'account', 'offline'], 'prism');
+    if (mode === 'offline' && !offlineAllowed) throw new ApiError('Offline launching is not available on this computer.', 'FORBIDDEN');
+    const name = text(a.offlineName, 16);
+    if (name && !PLAYER_NAME.test(name)) throw new ApiError('A player name is 3 to 16 letters, digits or underscores.', 'BAD_REQUEST');
+    store.config.launchMode = mode;
+    if (offlineAllowed) store.config.offlineName = name;
     store.saveConfig();
     return publicConfig();
   },
@@ -205,10 +249,16 @@ const methods = {
     return publicConfig();
   },
 
-  'instances.launch': (a) => {
+  'instances.launch': async (a) => {
     const inst = store.instance(a.id);
     if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
     if (!instances.isDir(inst.path)) throw new ApiError(`The folder for "${inst.name}" no longer exists: ${inst.path}`, 'NO_FOLDER');
+    const how = howToLaunch(inst);
+    if (how && how.direct) {
+      const session = how.direct === 'account' ? await account.gameSession(store.config.msClientId) : game.offlineSession(store.config.offlineName);
+      await game.launch(inst, session, emit);
+      return { label: 'Modion', play: true };
+    }
     return launcher.launch(inst.path);
   },
 

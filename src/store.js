@@ -28,6 +28,8 @@ class Store {
       activeInstanceId: typeof config.activeInstanceId === 'string' ? config.activeInstanceId : null,
       curseforgeKey: typeof config.curseforgeKey === 'string' ? config.curseforgeKey : '',
       msClientId: typeof config.msClientId === 'string' ? config.msClientId : '',
+      launchMode: ['prism', 'account', 'offline'].includes(config.launchMode) ? config.launchMode : 'prism',
+      offlineName: typeof config.offlineName === 'string' ? config.offlineName : '',
     };
     if (!this.instance(this.config.activeInstanceId)) {
       this.config.activeInstanceId = this.config.instances[0] ? this.config.instances[0].id : null;

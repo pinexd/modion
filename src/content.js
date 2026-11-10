@@ -409,4 +409,4 @@ function installedIds(store) {
   return out;
 }
 
-module.exports = { install, saveTo, list, toggle, remove, installedIds, discardPartials, FOLDER };
+module.exports = { download, install, saveTo, list, toggle, remove, installedIds, discardPartials, FOLDER };

@@ -335,13 +335,16 @@ function renderBottom() {
       h('div', { class: 'faint small' }, targetLabel(t) ? `Latest file for ${targetLabel(t)}` : 'Latest file'));
   } else if (inst && inst.launch) {
     // Outside a project page the middle of the bar is the launcher's Play button.
-    const play = btn(inst.launch.play ? 'Play' : 'Open Launcher', async () => {
+    const label = inst.launch.play ? 'Play' : 'Open Launcher';
+    const play = btn(label, async () => {
       play.disabled = true;
+      play.textContent = 'Starting...'; // a first launch downloads the game, which takes a while
       try {
         const r = await api('instances.launch', { id: inst.id });
         toast(r.play ? `Starting ${inst.name}` : `Opening ${r.label}`, r.play ? `${r.label} is launching the game.` : `Start "${inst.name}" from there.`);
       } catch (e) { fail(e, 'Could not start the game'); }
       setTimeout(() => { play.disabled = false; }, 4000); // long enough that a double click cannot start it twice
+      play.textContent = label;
     }, 'green play');
     action = h('div', { class: 'action' }, play,
       h('div', { class: 'faint small' }, inst.launch.play ? `via ${inst.launch.label}` : `${inst.launch.label} starts this instance`));
@@ -768,14 +771,32 @@ function viewSettings(v) {
       : btn('Sign In with Microsoft', () => { signingIn = true; render(); act(api('account.signIn'), 'Sign-in failed'); }, 'green');
   if (!who && !signingIn && !S.cfg.msClientId) signIn.disabled = true;
 
+  // How Play starts the game.
+  const mode = S.cfg.launchMode || 'prism';
+  const setLaunch = (patch) => act(api('settings.setLaunch', { mode, offlineName: S.cfg.offlineName || '', ...patch }), 'Setting not saved');
+  const modes = [['prism', 'Through Prism Launcher'], ['account', 'Directly, with my Microsoft account']];
+  if (S.cfg.offlineAllowed) modes.push(['offline', 'Directly, offline (this developer machine only)']);
+  const offlineName = h('input', { class: 'field', value: S.cfg.offlineName || '', placeholder: 'Player name', spellcheck: false, maxLength: 16 });
+  const modeNote = mode === 'prism'
+    ? 'Play hands the instance to Prism Launcher, or opens the launcher that owns it.'
+    : mode === 'account'
+      ? (who ? `Play starts the game as ${who.name}.` : 'Not signed in yet, so Play still goes through Prism Launcher. Sign in below.')
+      : (/^\w{3,16}$/.test(S.cfg.offlineName || '') ? `Play starts the game offline as ${S.cfg.offlineName}. Online servers will refuse an offline player.` : 'Enter a player name (3 to 16 letters, digits or underscores) to use offline mode.');
+
   v.append(h('div', { class: 'settings' },
+    h('div', { class: 'panel' },
+      h('h2', {}, 'Starting the game'),
+      h('div', { class: 'bar' }, select(modes, mode, (val) => setLaunch({ mode: val }))),
+      mode === 'offline' && h('div', { class: 'bar' }, offlineName, btn('Save Name', () => setLaunch({ offlineName: offlineName.value }))),
+      h('p', {}, modeNote),
+      h('p', { class: 'label' }, 'Starting directly works for vanilla, Fabric and Quilt on Minecraft 1.19 and newer. Other instances always use the launcher that owns them; the line under the Play button says which.')),
     h('div', { class: 'panel' },
       h('h2', {}, 'Minecraft account'),
       h('p', {}, 'Signing in needs the application (client) ID of your own Microsoft app registration, approved for the Minecraft API. The sign-in page opens in your web browser; Modion never sees your password.'),
       h('div', { class: 'bar' }, clientId, saveId),
       h('p', {}, signingIn ? 'Waiting for you to finish signing in in your browser...' : who ? `Signed in as ${who.name}.` : 'Not signed in.'),
       h('div', { class: 'bar' }, signIn),
-      h('p', { class: 'label' }, 'In the app registration, add the redirect URI http://localhost under "Mobile and desktop applications". Play still goes through Prism Launcher for now; this sign-in is the groundwork for launching the game directly.')),
+      h('p', { class: 'label' }, 'In the app registration, add the redirect URI http://localhost under "Mobile and desktop applications". Once signed in, choose "Directly, with my Microsoft account" above to have Play start the game itself.')),
     h('div', { class: 'panel' },
       h('h2', {}, 'CurseForge API key'),
       h('p', {}, 'Modrinth works out of the box. CurseForge only answers apps that send an API key, so browsing it needs your own (free) key from ',
