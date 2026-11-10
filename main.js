@@ -89,9 +89,9 @@ const offlineAllowed = (() => {
 })();
 const PLAYER_NAME = /^\w{3,16}$/;
 
-// What Play will do for this instance under the chosen setting. Anything the chosen way
-// cannot handle (not signed in, a Forge instance, an old version) falls back to the
-// launcher that owns the instance, and the label always says which it will be.
+// What Play will do for this instance under the chosen setting. When the chosen way is
+// not possible (not signed in, say), it falls back to the launcher that owns the
+// instance, and the label always says which it will be.
 function howToLaunch(inst) {
   const mode = store.config.launchMode;
   if (game.supports(inst)) {
@@ -153,10 +153,9 @@ async function makeInstance(spec) {
     }
     return launcher.create(spec);
   }
-  if (!game.supports(spec)) {
-    throw new ApiError('Modion cannot start Forge or NeoForge itself yet. For this one, set "Starting the game" in Settings to Prism Launcher and create it there.', 'UNSUPPORTED');
-  }
+  if (!game.supports(spec)) throw new ApiError('Modion cannot start that kind of instance itself.', 'UNSUPPORTED');
   await game.versionJson(spec.gameVersion); // fails for a version Mojang does not have
+  if (spec.loader) await launcher.loaderBuild(spec.loader, spec.gameVersion); // fails if the loader has no build for this version
   return launcher.createOwn(spec, libraries.usable(store.config.newInstanceDir));
 }
 

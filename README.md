@@ -34,9 +34,12 @@ Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step
   CurseForge zip; the latter needs your CurseForge API key), and rename, delete or open the
   folder of instances Modion made. Instances added from other launchers can be selected and
   forgotten, never renamed or deleted.
-- **Direct launching** – Modion can also start the game itself (vanilla, Fabric
-  and Quilt, back to Minecraft 1.0), downloading the game, assets and Java from Mojang into
-  `~/.local/share/ModionApp`. This needs a Microsoft sign-in (Settings, "Sign In
+- **Direct launching** – Modion can also start the game itself: vanilla back to
+  Minecraft 1.0, and Fabric, Quilt, Forge and NeoForge on the versions those loaders exist
+  for. It downloads the game, assets and Java from Mojang into `~/.local/share/ModionApp`.
+  Forge and NeoForge builds are looked up through Prism Launcher's metadata service, and
+  from 1.13 on are started through ForgeWrapper, which runs Forge's installer steps on the
+  first start (that first start takes a minute or two). This needs a Microsoft sign-in (Settings, "Sign In
   with Microsoft"): the sign-in page opens in your own web browser and Modion receives the
   result on a one-shot `http://localhost` listener, never your password. Settings has a
   "Starting the game" choice between Prism Launcher and starting directly. An offline mode exists for

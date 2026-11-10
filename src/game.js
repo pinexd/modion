@@ -6,7 +6,10 @@
 // Covers vanilla from 1.0 on, and Fabric and Quilt wherever those loaders exist. Versions
 // before 1.19 need native libraries unpacked; versions before 1.13 describe their launch
 // command in an older format; versions before 1.7.3 keep their assets as plain files.
-// Forge/NeoForge (which need their installers run) are not handled here yet.
+// Forge and NeoForge are described by Prism Launcher's metadata service, which has every
+// build back to 1.1 in one format. From 1.13 on they are started through ForgeWrapper, a
+// small program that runs Forge's own installer steps on first start; 1.6 to 1.12.2 are
+// extra libraries plus a "tweak class"; 1.5.2 and older are patches merged into the game jar.
 
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -15,7 +18,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { getJson, ApiError, arr } = require('./http');
 const { download } = require('./content');
-const { openZip } = require('./zip');
+const { openZip, writeZip } = require('./zip');
+const launcher = require('./launcher');
 
 const ROOT = require('./libraries').APP_DATA; // ~/.local/share/ModionApp
 const MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
@@ -27,7 +31,33 @@ const LOADER_META = {
 };
 const PARALLEL = 12;
 
-const supports = (inst) => Boolean(inst && inst.gameVersion && (!inst.loader || Object.hasOwn(LOADER_META, inst.loader)));
+const PRISM_LOADERS = { forge: 'Forge', neoforge: 'NeoForge' };
+// Libraries old Forge (1.3.2 to 1.5.2) expects in the game folder's "lib"; it used to fetch
+// them itself from servers that no longer exist.
+const FML_LIBS_URL = 'https://files.prismlauncher.org/fmllibs/';
+const FML_OLD = ['argo-2.25.jar', 'guava-12.0.1.jar', 'asm-all-4.0.jar'];
+const FML_15 = ['argo-small-3.2.jar', 'guava-14.0-rc3.jar', 'asm-all-4.1.jar', 'bcprov-jdk15on-148.jar', 'scala-library.jar'];
+const fmlLibs = (gameVersion) => (
+  gameVersion === '1.3.2' ? FML_OLD
+    : /^1\.4(\.\d)?$/.test(gameVersion) ? [...FML_OLD, 'bcprov-jdk15on-147.jar']
+      : /^1\.5(\.[12])?$/.test(gameVersion) ? [...FML_15, `deobfuscation_data_${gameVersion}.zip`]
+        : []);
+
+// Forge's installer steps check their output files byte for byte. On systems whose zlib is
+// zlib-ng (Arch-based and Fedora, among others) Java compresses slightly differently, the
+// files are correct but not identical, and the check fails. It is switched off there.
+let zlibNg = null;
+function systemZlibIsNg() {
+  if (zlibNg === null) {
+    zlibNg = ['/usr/lib/libz.so.1', '/usr/lib64/libz.so.1', '/usr/lib/x86_64-linux-gnu/libz.so.1', '/lib/x86_64-linux-gnu/libz.so.1'].some((file) => {
+      try { return fs.readFileSync(file).includes('zlib-ng'); } catch { return false; }
+    });
+  }
+  return zlibNg;
+}
+
+const supports = (inst) => Boolean(inst && inst.gameVersion
+  && (!inst.loader || Object.hasOwn(LOADER_META, inst.loader) || Object.hasOwn(PRISM_LOADERS, inst.loader)));
 
 // Mojang's metadata marks libraries and arguments with rules such as "only on macOS".
 function allowed(rules) {
@@ -69,6 +99,27 @@ async function versionJson(gameVersion) {
 }
 
 async function loaderProfile(loader, gameVersion) {
+  if (Object.hasOwn(PRISM_LOADERS, loader)) {
+    const version = await launcher.loaderBuild(loader, gameVersion);
+    const meta = await launcher.loaderMeta(loader, version);
+    if (!meta || typeof meta !== 'object') throw new ApiError(`${PRISM_LOADERS[loader]} ${version} has no usable description.`, 'BAD_REPLY');
+    return {
+      version,
+      mainClass: typeof meta.mainClass === 'string' ? meta.mainClass : null,
+      libraries: arr(meta.libraries),
+      extraFiles: arr(meta.mavenFiles),   // needed on disk, not on the classpath
+      jarMods: arr(meta.jarMods),         // patches to merge into the game jar
+      gameLine: typeof meta.minecraftArguments === 'string' ? meta.minecraftArguments : null,
+      tweakers: arr(meta['+tweakers']).filter((t) => typeof t === 'string' && /^[\w.$]+$/.test(t)),
+      legacyFML: arr(meta['+traits']).includes('legacyFML'),
+      javaFix: loader === 'forge' && gameVersion === '1.7.2',
+      // These builds are described on the assumption that the game uses the patched log4j
+      // that Prism lists for it, so that is taken along (it also closes Log4Shell properly).
+      patched: arr((await launcher.gameMeta(gameVersion).catch(() => null) || {}).libraries)
+        .filter((l) => l && typeof l.name === 'string' && l.name.startsWith('org.apache.logging.log4j:')),
+      prism: true,
+    };
+  }
   const meta = LOADER_META[loader];
   const builds = arr(await getJson(`${meta.base}/${encodeURIComponent(gameVersion)}`)).filter((b) => b && b.loader && b.loader.version);
   const pick = builds.find((b) => b.loader.stable) || builds.find((b) => !/beta|alpha|rc/i.test(b.loader.version)) || builds[0];
@@ -90,7 +141,13 @@ async function fetchAll(items, progress) {
     while (next < missing.length && !failure) {
       const it = missing[next++];
       try {
-        await download(it, it.dir);
+        // A dropped connection among hundreds of files is worth a second and third try.
+        for (let attempt = 1; ; attempt++) {
+          try { await download(it, it.dir); break; } catch (e) {
+            if (attempt >= 3 || !(e instanceof ApiError) || e.code !== 'NETWORK') throw e;
+            await new Promise((r) => setTimeout(r, 1000 * attempt));
+          }
+        }
         if (it.mode) await fsp.chmod(path.join(it.dir, it.filename), it.mode);
       } catch (e) {
         failure = e;
@@ -175,6 +232,64 @@ async function unpackNatives(jars, dir) {
   }
 }
 
+// Forge from 1.13 on finishes its installation on the computer: it patches the game jar
+// and writes the results into the libraries folder. ForgeWrapper does that work when it is
+// started. Here it is started once on its own, with nothing but itself on the classpath:
+// the installation runs, and then ForgeWrapper fails to start the game, which is not
+// there. That failure (a non-zero exit) is the sign that it got all the way through; when
+// the installation itself fails, ForgeWrapper says so and exits normally.
+// Doing this before the game starts means a failure is reported instead of the game just
+// not appearing, and that everything Forge builds exists by the time the game needs it.
+async function installForge(java, wrapper, options, gameLine, name) {
+  // Only the arguments that say which Forge this is; none of them carry account details.
+  const words = String(gameLine || '').split(/\s+/).filter(Boolean);
+  const ident = [];
+  for (let i = 0; i < words.length - 1; i++) {
+    if (/^--(fml\.\w+|launchTarget)$/.test(words[i]) && !words[i + 1].includes('${')) ident.push(words[i], words[i + 1]);
+  }
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'modion-forge-'));
+  try {
+    const { finished, text } = await new Promise((resolve) => {
+      require('child_process').execFile(java, [...options, '-cp', wrapper, 'io.github.zekerzhayard.forgewrapper.installer.Main', ...ident],
+        { cwd: dir, timeout: 20 * 60 * 1000, maxBuffer: 256 * 2 ** 20 },
+        (err, stdout, stderr) => resolve({ finished: Boolean(err) && !err.killed && Number.isInteger(err.code) && err.code !== 0, text: `${stdout}\n${stderr}` }));
+    });
+    if (!finished || /Processor failed|forgewrapper\.installer\.Installer\.|\.installer\.actions\./.test(text)) {
+      const lines = text.split('\n').map((l) => l.trim()).filter((l) => l && !/^at /.test(l));
+      const at = lines.findIndex((l) => /Processor failed/.test(l));
+      const tail = (at >= 0 ? lines.slice(at, at + 4) : lines.slice(-4)).join(' | ').slice(0, 600);
+      throw new ApiError(`Setting up ${name} did not finish. ${tail}`.trim(), 'LOADER_INSTALL');
+    }
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+}
+
+// Old Forge is installed by putting its files into the game jar: later archives win over
+// earlier ones, and the jar's signature (META-INF) goes, since it no longer matches.
+async function mergeJars(base, patches, out) {
+  const files = new Map();
+  for (const file of [base, ...patches]) {
+    const zip = openZip(file);
+    try {
+      for (const entry of zip.entries.values()) {
+        if (entry.name.endsWith('/') || entry.name.startsWith('META-INF/')) continue;
+        files.set(entry.name, zip.read(entry));
+      }
+    } finally {
+      zip.close();
+    }
+  }
+  const tmp = `${out}.${crypto.randomBytes(4).toString('hex')}.part`;
+  try {
+    writeZip(tmp, [...files].map(([name, data]) => ({ name, data })));
+    await fsp.rename(tmp, out);
+  } catch (e) {
+    await fsp.rm(tmp, { force: true });
+    throw new ApiError(`Could not build the patched game jar: ${e.code || e.message}.`, 'FS');
+  }
+}
+
 // Versions before 1.7.3 read their sounds and language files by name, not through the
 // asset index: from <game folder>/resources (up to 1.5.2) or from one shared folder.
 async function legacyAssets(index, id, gameDir) {
@@ -222,11 +337,32 @@ async function prepare(inst, progress) {
   const libs = new Map(); // "group:artifact[:classifier]" -> item; the loader's choice of a library wins
   const nativeJars = [];  // jars of native code to unpack (versions before 1.19)
   const add = (name, item) => { const [g, a, , c] = String(name).split(':'); const key = `${g}:${a}${c ? `:${c}` : ''}`; if (!libs.has(key)) libs.set(key, item); };
-  for (const lib of arr(profile && profile.libraries)) {
-    if (!lib || !lib.name) continue;
-    const rel = mavenPath(lib.name);
+  // A loader's library: either a full download record, or a name plus the repository it is in.
+  const loaderItem = (lib) => {
+    const a = (lib.downloads && lib.downloads.artifact) || {};
+    const rel = typeof a.path === 'string' && a.path ? a.path : mavenPath(lib.name);
     const full = inside(libDir, rel);
-    add(lib.name, { url: String(lib.url || 'https://libraries.minecraft.net/').replace(/\/?$/, '/') + rel, sha1: lib.sha1, size: lib.size, dir: path.dirname(full), filename: path.basename(full) });
+    return {
+      url: a.url || String(lib.url || 'https://libraries.minecraft.net/').replace(/\/?$/, '/') + rel,
+      sha1: a.sha1 || lib.sha1, size: a.size || lib.size, dir: path.dirname(full), filename: path.basename(full),
+    };
+  };
+  for (const lib of [...arr(profile && profile.libraries), ...arr(profile && profile.patched)]) {
+    if (lib && lib.name && allowed(lib.rules)) add(lib.name, loaderItem(lib));
+  }
+  const extras = arr(profile && profile.extraFiles).filter((l) => l && l.name).map((l) => ({ name: String(l.name), item: loaderItem(l) }));
+  const jarMods = arr(profile && profile.jarMods).filter((l) => l && l.downloads && l.downloads.artifact && l.downloads.artifact.url).map((l) => {
+    const a = l.downloads.artifact;
+    return { url: a.url, sha1: a.sha1, size: a.size, dir: path.join(ROOT, 'jarmods'), filename: path.basename(new URL(a.url).pathname) };
+  });
+  const gameLib = profile && profile.legacyFML
+    ? fmlLibs(inst.gameVersion).map((name) => ({ url: FML_LIBS_URL + name, dir: path.join(inst.path, 'lib'), filename: name }))
+    : [];
+  // Some Forge builds of that era stop with an error on any Java newer than 7, and there is
+  // no Java 7 to be had any more. Forge's own remedy is a small mod, "legacy Java fixer",
+  // which goes into the instance's mods folder like any other.
+  if (profile && profile.javaFix) {
+    gameLib.push({ url: 'https://maven.minecraftforge.net/net/minecraftforge/lex/legacyjavafixer/1.0/legacyjavafixer-1.0.jar', sha1: 'a11b502bef19f49bfc199722b94da5f3d7b470a8', size: 6245, dir: path.join(inst.path, 'mods'), filename: 'legacyjavafixer-1.0.jar' });
   }
   for (const lib of arr(game.libraries)) {
     if (!lib || !allowed(lib.rules)) continue;
@@ -267,18 +403,71 @@ async function prepare(inst, progress) {
 
   // Java first: its progress is reported on its own, then the game files as one total.
   const java = await findJava(game.javaVersion, progress);
-  await fetchAll([client, ...libs.values(), ...nativeJars.map((n) => n.item), ...assets.values()], progress);
+  await fetchAll([client, ...libs.values(), ...extras.map((e) => e.item), ...jarMods, ...gameLib, ...nativeJars.map((n) => n.item), ...assets.values()], progress);
 
   const natives = path.join(ROOT, 'natives', crypto.createHash('sha1').update(inst.path).digest('hex').slice(0, 12));
   await unpackNatives(nativeJars, natives);
   const gameAssets = await legacyAssets(index, game.assetIndex.id, inst.path);
   const logging = await loggingConfig(game);
 
-  const classpath = [...[...libs.values()].map((l) => path.join(l.dir, l.filename)), path.join(versionDir, client.filename)];
-  return { game, profile, java, classpath, natives, gameAssets, logging };
+  // The game jar itself, or (old Forge) a copy with the loader's patches merged in.
+  let gameJar = path.join(versionDir, client.filename);
+  if (jarMods.length) {
+    const patched = path.join(versionDir, `${inst.gameVersion}-${inst.loader}-${String(profile.version).replace(/[^\w.-]/g, '_')}.jar`);
+    if (!fs.existsSync(patched)) await mergeJars(gameJar, jarMods.map((j) => path.join(j.dir, j.filename)), patched);
+    gameJar = patched;
+  }
+
+  // Extra Java options the loader needs.
+  const jvm = [];
+  const built = []; // jars the loader makes for itself on the first start
+  const installer = extras.find((e) => e.name.endsWith(':installer'));
+  if (installer) {
+    // ForgeWrapper: where the libraries are, which installer to run, and which game jar to patch.
+    jvm.push(`-Dforgewrapper.librariesDir=${libDir}`, `-Dforgewrapper.installer=${path.join(installer.item.dir, installer.item.filename)}`, `-Dforgewrapper.minecraft=${gameJar}`);
+    if (systemZlibIsNg()) jvm.push('-Dforgewrapper.skipHashCheck=true');
+    // Newer Forge lists the patched game jar, which its installer steps produce on the first
+    // start, among its libraries. It cannot be downloaded, so the metadata leaves it out;
+    // it still has to be on the classpath, ahead of the unpatched game.
+    try {
+      const zip = openZip(path.join(installer.item.dir, installer.item.filename));
+      try {
+        const entry = zip.entries.get('version.json');
+        for (const lib of arr(entry && JSON.parse(zip.read(entry).toString('utf8')).libraries)) {
+          if (lib && /^net\.(minecraftforge|neoforged):[\w.-]+:[\w.-]+:client$/.test(String(lib.name))) built.push(inside(libDir, mavenPath(lib.name)));
+        }
+      } finally {
+        zip.close();
+      }
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'BAD_NAME') throw e;
+    }
+  } else if (profile && profile.prism) {
+    // Old Forge checks that the game jar is untouched and stops if it is not sure.
+    jvm.push('-Dfml.ignoreInvalidMinecraftCertificates=true', '-Dfml.ignorePatchDiscrepancies=true');
+    // Forge up to 1.5.2 takes the game folder from this setting, not from the command line.
+    if (jarMods.length) jvm.push(`-Dminecraft.applet.TargetDirectory=${inst.path}`);
+  }
+
+  if (installer) {
+    const wrapper = [...libs].find(([key]) => key === 'io.github.zekerzhayard:ForgeWrapper');
+    const done = `${path.join(installer.item.dir, installer.item.filename)}.installed`;
+    if (wrapper && (!fs.existsSync(done) || built.some((f) => !fs.existsSync(f)))) {
+      await installForge(java, path.join(wrapper[1].dir, wrapper[1].filename), jvm, profile.gameLine, `${PRISM_LOADERS[inst.loader] || 'the loader'} ${profile.version}`);
+      await fsp.writeFile(done, new Date().toISOString());
+    }
+  }
+
+  // Versions up to 1.5.2 work out where their files go from the home folder, and write a log
+  // there before they are told the game folder. Giving them the game folder as "home"
+  // keeps that stray file inside the instance instead of in the real ~/.minecraft.
+  if (index.map_to_resources) jvm.push(`-Duser.home=${inst.path}`);
+
+  const classpath = [...built, ...[...libs.values()].map((l) => path.join(l.dir, l.filename)), gameJar];
+  return { game, profile, java, classpath, natives, gameAssets, logging, jvm };
 }
 
-function launchArgs({ game, profile, classpath, natives, gameAssets, logging }, inst, session) {
+function launchArgs({ game, profile, classpath, natives, gameAssets, logging, jvm }, inst, session) {
   const values = {
     auth_player_name: session.name,
     auth_uuid: session.uuid,
@@ -315,9 +504,12 @@ function launchArgs({ game, profile, classpath, natives, gameAssets, logging }, 
     ...(logging ? [logging] : []),
     ...(modern ? expand(game.arguments.jvm) : [`-Djava.library.path=${natives}`, '-cp', values.classpath]),
     ...expand(profile && profile.arguments && profile.arguments.jvm),
+    ...jvm,
     (profile && profile.mainClass) || game.mainClass,
-    ...(modern ? expand(game.arguments.game) : words(game.minecraftArguments)),
+    // A loader may replace the game's argument line with its own (Forge from 1.13 on does).
+    ...(profile && profile.gameLine ? words(profile.gameLine) : modern ? expand(game.arguments.game) : words(game.minecraftArguments)),
     ...expand(profile && profile.arguments && profile.arguments.game),
+    ...arr(profile && profile.tweakers).flatMap((t) => ['--tweakClass', t]),
   ];
 }
 

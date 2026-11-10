@@ -117,6 +117,9 @@ async function loaderBuild(loader, gameVersion, loaderVersion) {
   return pick.version;
 }
 
+// Prism's description of the game itself for a version (it lists patched libraries).
+const gameMeta = (gameVersion) => getJson(`${META}/net.minecraft/${encodeURIComponent(gameVersion)}.json`);
+
 // The full description of one loader build (libraries, main class, arguments).
 const loaderMeta = (loader, version) => getJson(`${META}/${LOADER_UID[loader]}/${encodeURIComponent(version)}.json`);
 
@@ -217,4 +220,4 @@ async function create({ name, gameVersion, loader, loaderVersion }) {
   }
 }
 
-module.exports = { canCreate, describe, launch, create, createOwn, rename, cleanName, prismRoots, loaderBuild, loaderMeta };
+module.exports = { canCreate, describe, launch, create, createOwn, rename, cleanName, prismRoots, loaderBuild, loaderMeta, gameMeta };

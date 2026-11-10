@@ -427,7 +427,12 @@ require('../main.js').ready.then(async (win) => {
       expect(inst.launch && inst.launch.label === 'Modion, offline as Tester_1' && inst.movable, `own instance: ${JSON.stringify(inst)}`);
       expect(JSON.parse(fs.readFileSync(path.join(own, 'instance.json'), 'utf8')).id === inst.id, 'the instance folder does not carry its ID');
       const forge = await call('instances.create', { name: 'Forge One', gameVersion: '1.20.1', loader: 'forge' });
-      expect(!forge.ok && forge.code === 'UNSUPPORTED' && !fs.existsSync(path.join(prismInstances, 'Forge One')), 'a Forge instance was made although Modion cannot start it');
+      expect(forge.ok && fs.existsSync(path.join(data, 'Modion', 'Forge One', 'minecraft')) && !fs.existsSync(path.join(prismInstances, 'Forge One')), `a Forge instance did not go to Modion's library: ${JSON.stringify(forge).slice(0, 200)}`);
+      const forgeInst = forge.data.instances[forge.data.instances.length - 1];
+      expect(forgeInst.launch && forgeInst.launch.label === 'Modion, offline as Tester_1', `forge instance launch: ${JSON.stringify(forgeInst.launch)}`);
+      const none = await call('instances.create', { name: 'No Such', gameVersion: '1.0', loader: 'neoforge' });
+      expect(!none.ok && none.code === 'NO_LOADER_VERSION', 'NeoForge for 1.0 was accepted');
+      expect((await call('instances.delete', { id: forgeInst.id })).ok && !fs.existsSync(path.join(data, 'Modion', 'Forge One')), 'the Forge instance was not deleted');
       fs.writeFileSync(path.join(own, 'minecraft', 'world.dat'), 'precious');
       const cfg = async () => (await call('config.get')).data;
       const lib = (c, dir) => c.libraries.find((l) => l.path === dir);
