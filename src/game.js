@@ -3,7 +3,7 @@
 // from Mojang's own servers into a shared folder, builds the launch command from the
 // version's metadata, and runs it in the instance's game folder.
 //
-// Covers vanilla from 1.0 on, and Fabric and Quilt wherever those loaders exist. Versions
+// Works on Linux and Windows (64-bit Intel/AMD). Covers vanilla from 1.0 on, and Fabric and Quilt wherever those loaders exist. Versions
 // before 1.19 need native libraries unpacked; versions before 1.13 describe their launch
 // command in an older format; versions before 1.7.3 keep their assets as plain files.
 // Forge and NeoForge are described by Prism Launcher's metadata service, which has every
@@ -20,6 +20,7 @@ const { getJson, ApiError, arr } = require('./http');
 const { download } = require('./content');
 const { openZip, writeZip } = require('./zip');
 const launcher = require('./launcher');
+const platform = require('./platform');
 
 const ROOT = require('./libraries').APP_DATA; // ~/.local/share/ModionApp
 const MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
@@ -65,7 +66,7 @@ function allowed(rules) {
   let ok = false;
   for (const r of rules) {
     if (!r) continue;
-    const osOk = !r.os || ((!r.os.name || r.os.name === 'linux') && (!r.os.arch || r.os.arch === 'x64'));
+    const osOk = !r.os || ((!r.os.name || r.os.name === platform.OS_NAME) && (!r.os.arch || r.os.arch === 'x64'));
     // Optional launcher features (demo mode, custom resolution, quick play) are all off.
     const featuresOk = !r.features || Object.values(r.features).every((v) => v === false);
     if (osOk && featuresOk) ok = r.action === 'allow';
@@ -166,8 +167,8 @@ async function fetchAll(items, progress) {
 async function findJava(wanted, progress) {
   const major = Number(wanted && wanted.majorVersion) || 8;
   const component = (wanted && wanted.component) || 'jre-legacy';
-  let systems = [];
-  try { systems = await fsp.readdir('/usr/lib/jvm'); } catch {}
+  let systems = []; // (Linux keeps installed Javas in one place; on Windows Mojang's own is always used)
+  try { if (!platform.WIN) systems = await fsp.readdir('/usr/lib/jvm'); } catch {}
   for (const name of systems) {
     const home = path.join('/usr/lib/jvm', name);
     try {
@@ -180,12 +181,12 @@ async function findJava(wanted, progress) {
 
   if (!/^[\w-]+$/.test(component)) throw new ApiError('Unreadable Java runtime name.', 'BAD_REPLY');
   const home = path.join(ROOT, 'runtimes', component);
-  const java = path.join(home, 'bin/java');
+  const java = path.join(home, platform.JAVA);
   const marker = path.join(home, '.complete');
   if (fs.existsSync(marker) && fs.existsSync(java)) return java;
 
   const all = await getJson(RUNTIMES);
-  const offer = arr(all.linux && all.linux[component])[0];
+  const offer = arr(all[platform.RUNTIME_OS] && all[platform.RUNTIME_OS][component])[0];
   if (!offer || !offer.manifest || !offer.manifest.url) throw new ApiError(`No Java ${major} runtime is available for this system. Install Java ${major} and try again.`, 'NO_JAVA');
   const files = (await getJson(offer.manifest.url)).files || {};
   const items = [], links = [];
@@ -251,7 +252,7 @@ async function installForge(java, wrapper, options, gameLine, name) {
   try {
     const { finished, text } = await new Promise((resolve) => {
       require('child_process').execFile(java, [...options, '-cp', wrapper, 'io.github.zekerzhayard.forgewrapper.installer.Main', ...ident],
-        { cwd: dir, timeout: 20 * 60 * 1000, maxBuffer: 256 * 2 ** 20 },
+        { cwd: dir, timeout: 20 * 60 * 1000, maxBuffer: 256 * 2 ** 20, windowsHide: true },
         (err, stdout, stderr) => resolve({ finished: Boolean(err) && !err.killed && Number.isInteger(err.code) && err.code !== 0, text: `${stdout}\n${stderr}` }));
     });
     if (!finished || /Processor failed|forgewrapper\.installer\.Installer\.|\.installer\.actions\./.test(text)) {
@@ -344,7 +345,7 @@ async function loggingConfig(game) {
 
 // Everything needed to start this instance, downloading what is missing.
 async function prepare(inst, progress) {
-  if (process.arch !== 'x64') throw new ApiError('Direct launching is only set up for 64-bit Intel/AMD Linux so far.', 'UNSUPPORTED');
+  if (process.arch !== 'x64') throw new ApiError('Direct launching is only set up for 64-bit Intel/AMD computers so far.', 'UNSUPPORTED');
   const game = await versionJson(inst.gameVersion);
   if ((!game.arguments && typeof game.minecraftArguments !== 'string') || !game.downloads || !game.downloads.client || !game.assetIndex) {
     throw new ApiError(`Mojang's description of Minecraft ${inst.gameVersion} is not one Modion can start.`, 'UNSUPPORTED');
@@ -389,7 +390,7 @@ async function prepare(inst, progress) {
       const full = inside(libDir, a.path);
       add(lib.name, { url: a.url, sha1: a.sha1, size: a.size, dir: path.dirname(full), filename: path.basename(full) });
     }
-    const key = lib.natives && typeof lib.natives.linux === 'string' ? lib.natives.linux.replace('${arch}', '64') : null;
+    const key = lib.natives && typeof lib.natives[platform.OS_NAME] === 'string' ? lib.natives[platform.OS_NAME].replace('${arch}', '64') : null;
     const n = key && lib.downloads && lib.downloads.classifiers && lib.downloads.classifiers[key];
     if (n && n.url && n.path) {
       const full = inside(libDir, n.path);
@@ -479,14 +480,19 @@ async function prepare(inst, progress) {
   // Versions up to 1.5.2 work out where their files go from the home folder, and write a log
   // there before they are told the game folder. Giving them the game folder as "home"
   // keeps that stray file inside the instance instead of in the real ~/.minecraft.
-  if (index.map_to_resources) jvm.push(`-Duser.home=${inst.path}`);
+  // (On Windows they go by the APPDATA setting instead, which is given to the game likewise.)
+  const env = {};
+  if (index.map_to_resources) {
+    jvm.push(`-Duser.home=${inst.path}`);
+    if (platform.WIN) env.APPDATA = inst.path;
+  }
 
   if (inst.loader === 'forge' && FORGE_WAYLAND_CRASH.includes(inst.gameVersion) && (process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === 'wayland')) {
     await disableForgeEarlyWindow(inst.path);
   }
 
   const classpath = [...built, ...[...libs.values()].map((l) => path.join(l.dir, l.filename)), gameJar];
-  return { game, profile, java, classpath, natives, gameAssets, logging, jvm };
+  return { game, profile, java, classpath, natives, gameAssets, logging, jvm, env };
 }
 
 function launchArgs({ game, profile, classpath, natives, gameAssets, logging, jvm }, inst, session) {
@@ -508,7 +514,7 @@ function launchArgs({ game, profile, classpath, natives, gameAssets, logging, jv
     natives_directory: natives,
     launcher_name: 'modion',
     launcher_version: require('../package.json').version,
-    classpath: classpath.join(':'),
+    classpath: classpath.join(path.delimiter),
   };
   const fill = (s) => String(s).replace(/\$\{(\w+)\}/g, (m, k) => (Object.hasOwn(values, k) ? values[k] : ''));
   const expand = (list) => arr(list).flatMap((a) => {
@@ -570,7 +576,7 @@ async function launch(inst, session, emit) {
     const log = fs.openSync(logFile, 'w');
     let child;
     try {
-      child = require('child_process').spawn(ready.java, args, { cwd: inst.path, detached: true, stdio: ['ignore', log, log] });
+      child = require('child_process').spawn(ready.java, args, { cwd: inst.path, env: { ...process.env, ...ready.env }, detached: true, windowsHide: true, stdio: ['ignore', log, log] });
     } finally {
       fs.closeSync(log);
     }

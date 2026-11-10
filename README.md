@@ -1,6 +1,6 @@
 # Modion
 
-A Minecraft mod manager for Linux. Browse, read about and install mods, resource packs,
+A Minecraft mod manager for Linux, with an experimental Windows port. Browse, read about and install mods, resource packs,
 shaders and data packs from **Modrinth** and **CurseForge** into the instances of the
 launchers you already use.
 
@@ -19,6 +19,14 @@ Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step
 ```
 
 `./install-desktop-entry.sh` adds it to your application menu.
+
+### Windows
+
+Download `modion-<version>-windows-x64.zip` from a release, unpack it anywhere and run
+`Modion.exe`. Electron is included. The Windows port has not been tried on a real Windows
+computer yet: treat it as experimental and please report what breaks. Settings are kept in
+`%APPDATA%\Modion`, new instances in `%APPDATA%\Modion\instances`, and downloaded game
+files in `%LOCALAPPDATA%\ModionApp`.
 
 ## Using it
 

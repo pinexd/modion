@@ -1,5 +1,6 @@
 # Run by hand: Actions tab -> Release -> Run workflow.
-# Packs Modion into a tarball and opens a release for it. With "draft" left on, the release
+# Packs Modion into a tarball (Linux) and a zip with Electron included (Windows) and opens
+# a release for them. With "draft" left on, the release
 # is not public until you press Publish on it, so the notes can be written or polished in
 # GitHub's release editor first.
 #
@@ -74,6 +75,31 @@ jobs:
           tar -czf "$dir.tar.gz" "$dir"
           sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
           echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+          echo "APP_DIR=$dir" >> "$GITHUB_ENV"
+
+      # Windows has no system Electron, so its package carries one: Electron's own Windows
+      # build (checked against Electron's published checksums) with Modion placed inside.
+      - name: Pack for Windows
+        env:
+          ELECTRON: '44.10.2'
+        run: |
+          base="https://github.com/electron/electron/releases/download/v$ELECTRON"
+          zipname="electron-v$ELECTRON-win32-x64.zip"
+          curl -fsSL -o "$zipname" "$base/$zipname"
+          curl -fsSL -o SHASUMS256.txt "$base/SHASUMS256.txt"
+          grep " \*\?$zipname\$" SHASUMS256.txt | sed 's/ \*/  /' | sha256sum -c -
+          win="modion-${TAG#v}-windows-x64"
+          mkdir "$win"
+          unzip -q "$zipname" -d "$win"
+          rm -f "$win/resources/default_app.asar"
+          mv "$win/electron.exe" "$win/Modion.exe"
+          mkdir "$win/resources/app"
+          cp -r "$APP_DIR"/main.js "$APP_DIR"/preload.js "$APP_DIR"/package.json "$APP_DIR"/README.md "$APP_DIR"/src "$APP_DIR"/ui "$APP_DIR"/assets "$win/resources/app/"
+          [ -f "$APP_DIR/LICENSE" ] && cp "$APP_DIR/LICENSE" "$win/resources/app/"
+          [ -f "$APP_DIR/curseforge.key" ] && cp "$APP_DIR/curseforge.key" "$win/resources/app/"
+          zip -qr "$win.zip" "$win"
+          sha256sum "$win.zip" > "$win.zip.sha256"
+          echo "WIN_ASSET=$win.zip" >> "$GITHUB_ENV"
 
       - name: Create the release
         run: |
@@ -97,4 +123,4 @@ jobs:
           fi
           [ "$DRAFT" = "true" ] && args+=(--draft)
           [ "$PRERELEASE" = "true" ] && args+=(--prerelease)
-          gh release create "$TAG" "$ASSET" "$ASSET.sha256" "${args[@]}"
+          gh release create "$TAG" "$ASSET" "$ASSET.sha256" "$WIN_ASSET" "$WIN_ASSET.sha256" "${args[@]}"

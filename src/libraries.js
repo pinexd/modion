@@ -10,9 +10,9 @@ const os = require('os');
 const path = require('path');
 const { ApiError } = require('./http');
 
-const DATA = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share');
-const DEFAULT = path.join(DATA, 'Modion');     // where new instances go unless Settings says otherwise
-const APP_DATA = path.join(DATA, 'ModionApp'); // the game files Modion downloads (shared by all instances)
+const platform = require('./platform');
+const DEFAULT = platform.DEFAULT_LIBRARY; // where new instances go unless Settings says otherwise
+const APP_DATA = platform.APP_DATA;       // the game files Modion downloads (shared by all instances)
 const META = 'instance.json';
 const GAME = 'minecraft';
 

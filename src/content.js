@@ -15,7 +15,9 @@ const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { retu
 const exists = (p) => fs.existsSync(p) || fs.existsSync(p + OFF);
 
 function safeName(name) {
-  const base = path.basename(String(name || '').replace(/\\/g, '/')).replace(/[\0-\x1f]/g, '');
+  // Control characters go everywhere; the characters Windows forbids in names go there too.
+  const base = path.basename(String(name || '').replace(/\\/g, '/')).replace(/[\0-\x1f]/g, '')
+    .replace(process.platform === 'win32' ? /[<>:"|?*]/g : /(?!)/g, '_');
   if (!base || base === '.' || base === '..') throw new ApiError('Refusing an unsafe file name.', 'BAD_NAME');
   return base;
 }

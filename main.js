@@ -249,6 +249,7 @@ function knownLibrary(v) {
 // The app's own data folder was ~/.local/share/modion and held the instances too. It is now
 // ModionApp, and the instances have a folder of their own (the default library).
 function migrateData() {
+  if (process.platform !== 'linux') return; // the old layout only ever existed on Linux
   const old = path.join(path.dirname(libraries.APP_DATA), 'modion');
   try {
     const ours = ['versions', 'libraries', 'assets', 'instances'].some((n) => libraries.isDir(path.join(old, n)));
@@ -751,7 +752,7 @@ function adoptLegacySettings(dir) {
   }
 }
 
-app.setDesktopName('modion.desktop');
+if (process.platform === 'linux') app.setDesktopName('modion.desktop');
 
 // Two copies would overwrite each other's settings, so a second launch just raises the first.
 const first = HEADLESS || app.requestSingleInstanceLock();

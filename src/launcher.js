@@ -4,12 +4,10 @@
 // and game files are the ones Prism already manages. (Starting the game directly is game.js.)
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { getJson, ApiError, arr } = require('./http');
 
-const HOME = os.homedir();
-const DATA = process.env.XDG_DATA_HOME || path.join(HOME, '.local/share');
+const { WIN, HOME, DATA, ROAMING, LOCAL, findProgram } = require('./platform');
 const META = 'https://meta.prismlauncher.org/v1';
 const LOADER_UID = {
   fabric: 'net.fabricmc.fabric-loader',
@@ -21,24 +19,23 @@ const LOADER_NAME = { fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge
 
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 
-function onPath(names) {
-  const dirs = String(process.env.PATH || '').split(':').filter(Boolean);
-  for (const name of names) {
-    for (const dir of dirs) {
-      try { fs.accessSync(path.join(dir, name), fs.constants.X_OK); return name; } catch {}
-    }
-  }
-  return null;
-}
+// Where the other launchers' programs are usually installed on Windows.
+const WIN_PROGRAMS = {
+  prism: [path.join(LOCAL, 'Programs', 'PrismLauncher', 'prismlauncher.exe'), 'prismlauncher.exe'],
+  modrinth: [path.join(LOCAL, 'Modrinth App', 'Modrinth App.exe'), 'C:\\Program Files\\Modrinth App\\Modrinth App.exe'],
+  minecraft: ['C:\\Program Files (x86)\\Minecraft Launcher\\MinecraftLauncher.exe', 'C:\\XboxGames\\Minecraft Launcher\\Content\\Minecraft.exe'],
+};
 
 // Where Prism keeps its data, and how to start that copy of it. MODION_PRISM_ROOT is for tests.
 function prismInstalls() {
   const all = process.env.MODION_PRISM_ROOT
     ? [{ root: process.env.MODION_PRISM_ROOT, cmd: ['prismlauncher'] }]
-    : [
-        { root: path.join(HOME, '.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher'), cmd: ['flatpak', 'run', 'org.prismlauncher.PrismLauncher'] },
-        { root: path.join(DATA, 'PrismLauncher'), cmd: ['prismlauncher'] },
-      ];
+    : WIN
+      ? [{ root: path.join(ROAMING, 'PrismLauncher'), cmd: [findProgram(WIN_PROGRAMS.prism) || 'prismlauncher.exe'] }]
+      : [
+          { root: path.join(HOME, '.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher'), cmd: ['flatpak', 'run', 'org.prismlauncher.PrismLauncher'] },
+          { root: path.join(DATA, 'PrismLauncher'), cmd: ['prismlauncher'] },
+        ];
   return all.filter((p) => isDir(path.join(p.root, 'instances')));
 }
 
@@ -54,19 +51,30 @@ function describe(gameDir) {
       return { play: true, label: 'Prism Launcher', cmd: [...p.cmd, '--launch', rel[0]] };
     }
   }
-  const under = (root) => !path.relative(root, gameDir).startsWith('..');
+  const under = (root) => { const rel = path.relative(root, gameDir); return !rel.startsWith('..') && !path.isAbsolute(rel); };
+  if (WIN) {
+    if (under(path.join(ROAMING, 'ModrinthApp')) || under(path.join(ROAMING, 'com.modrinth.theseus'))) {
+      const exe = findProgram(WIN_PROGRAMS.modrinth);
+      return exe ? { play: false, label: 'Modrinth App', cmd: [exe] } : null;
+    }
+    if (gameDir === path.join(ROAMING, '.minecraft')) {
+      const exe = findProgram(WIN_PROGRAMS.minecraft);
+      return exe ? { play: false, label: 'Minecraft Launcher', cmd: [exe] } : null;
+    }
+    return null;
+  }
   if (under(path.join(HOME, '.var/app/com.modrinth.ModrinthApp'))) {
     return { play: false, label: 'Modrinth App', cmd: ['flatpak', 'run', 'com.modrinth.ModrinthApp'] };
   }
   if (under(path.join(DATA, 'ModrinthApp'))) {
-    const bin = onPath(['modrinth-app', 'ModrinthApp']);
+    const bin = findProgram(['modrinth-app', 'ModrinthApp']);
     return bin ? { play: false, label: 'Modrinth App', cmd: [bin] } : null;
   }
   if (under(path.join(HOME, '.var/app/com.mojang.Minecraft'))) {
     return { play: false, label: 'Minecraft Launcher', cmd: ['flatpak', 'run', 'com.mojang.Minecraft'] };
   }
   if (gameDir === path.join(HOME, '.minecraft')) {
-    const bin = onPath(['minecraft-launcher']);
+    const bin = findProgram(['minecraft-launcher']);
     return bin ? { play: false, label: 'Minecraft Launcher', cmd: [bin] } : null;
   }
   return null;
@@ -78,7 +86,7 @@ function launch(gameDir) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = require('child_process').spawn(how.cmd[0], how.cmd.slice(1), { detached: true, stdio: 'ignore' });
+      child = require('child_process').spawn(how.cmd[0], how.cmd.slice(1), { detached: true, stdio: 'ignore', windowsHide: true });
     } catch (e) {
       reject(new ApiError(`Could not start ${how.label}: ${e.message}`, 'LAUNCH'));
       return;
@@ -139,7 +147,10 @@ async function components(gameVersion, loader, loaderVersion) {
 // loader and Java the first time the instance is started.
 // Instance names end up as folder names and in an INI file, so they are kept simple.
 function cleanName(name, gameVersion, loader) {
-  return String(name || '').replace(/[^\p{L}\p{N} ._()+-]/gu, '').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 60)
+  const clean = String(name || '').replace(/[^\p{L}\p{N} ._()+-]/gu, '').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 60)
+    .replace(/[. ]+$/, ''); // Windows drops trailing dots and spaces from folder names
+  // A few names (CON, NUL, COM1...) cannot be folders on Windows.
+  return (clean && !/^(con|prn|aux|nul|com\d|lpt\d)$/i.test(clean) ? clean : '')
     || `${loader ? LOADER_NAME[loader] : 'Minecraft'} ${gameVersion}`;
 }
 

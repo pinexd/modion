@@ -3,11 +3,9 @@
 // (vanilla launcher, Prism/MultiMC-style launchers, Modrinth App), native or Flatpak.
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
-const HOME = os.homedir();
-const DATA = process.env.XDG_DATA_HOME || path.join(HOME, '.local/share');
+const { WIN, HOME, DATA, ROAMING } = require('./platform');
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
 const subdirs = (p) => {
   try {
@@ -83,7 +81,8 @@ function modrinthApp(root) {
 
 function detect() {
   const found = [];
-  for (const p of [path.join(HOME, '.minecraft'), path.join(HOME, '.var/app/com.mojang.Minecraft/.minecraft')]) {
+  const vanilla = WIN ? [path.join(ROAMING, '.minecraft')] : [path.join(HOME, '.minecraft'), path.join(HOME, '.var/app/com.mojang.Minecraft/.minecraft')];
+  for (const p of vanilla) {
     if (isDir(p)) found.push({ name: '.minecraft', path: p, gameVersion: '', loader: '', launcher: 'Minecraft Launcher' });
   }
   const prismRoots = [
@@ -94,8 +93,10 @@ function detect() {
     [path.join(HOME, '.var/app/org.polymc.PolyMC/data/PolyMC/instances'), 'PolyMC'],
   ];
   for (const [root, launcher] of prismRoots) found.push(...prismStyle(root, launcher));
+  // (On Windows these launchers keep their data under %APPDATA%; the Flatpak paths simply do not exist there.)
   for (const root of [
     path.join(DATA, 'ModrinthApp'),
+    path.join(DATA, 'com.modrinth.theseus'), // the Modrinth App's older folder name
     path.join(HOME, '.var/app/com.modrinth.ModrinthApp/data/ModrinthApp'),
   ]) found.push(...modrinthApp(root));
   // The same folder can be reached twice (XDG_DATA_HOME pointing into a Flatpak, symlinks).
