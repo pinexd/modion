@@ -60,8 +60,23 @@ require('../main.js').ready.then(async (win) => {
     if (!image) throw new Error(`no frame for screenshot ${name}`);
     fs.writeFileSync(path.join(out, name + '.png'), image.toPNG());
   };
+  // Values that leaked into the page as text: a bare "false" or "null", or "undefined",
+  // "NaN" and "[object ...]" anywhere outside project descriptions and the game log.
+  const strayText = () => js(`(() => {
+    const found = [], walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walk.nextNode());) {
+      if (n.parentElement.closest('.prose, .log, script, style')) continue;
+      const t = n.data.trim();
+      if (/^(false|true|null)$/.test(t) || /\\bundefined\\b|\\bNaN\\b|\\[object /.test(t)) found.push(t.slice(0, 60) + ' (in ' + (n.parentElement.className || n.parentElement.id || n.parentElement.tagName) + ')');
+    }
+    return found;
+  })()`);
   const step = async (name, fn) => {
-    try { await fn(); console.log('ok  ', name); } catch (e) { problems.push(`${name}: ${e.message}`); console.log('FAIL', name, '-', e.message); }
+    try {
+      await fn();
+      const stray = await strayText();
+      if (stray.length) throw new Error('stray text on the page: ' + stray.join('; '));
+      console.log('ok  ', name); } catch (e) { problems.push(`${name}: ${e.message}`); console.log('FAIL', name, '-', e.message); }
   };
   const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
 

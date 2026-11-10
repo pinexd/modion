@@ -15,9 +15,15 @@ function h(tag, attrs, ...kids) {
     else if (k.startsWith('data-')) el.setAttribute(k, v);
     else el[k] = v;
   }
-  el.append(...kids.flat(Infinity).filter((k) => k != null && k !== false));
-  return el;
+  return add(el, kids);
 }
+
+// The DOM's own append() and replaceChildren() print false, null and undefined as text, so
+// a part written as `condition && element` would show up as the word "false". Everything
+// goes through these two instead, which leave such parts out.
+const present = (kids) => kids.flat(Infinity).filter((k) => k != null && k !== false && k !== true);
+function add(el, ...kids) { el.append(...present(kids)); return el; }
+function fill(el, ...kids) { el.replaceChildren(...present(kids)); return el; }
 
 async function api(method, args) {
   let r;
@@ -154,7 +160,7 @@ function versionSelect(value, blank, onchange) {
       const menu = el.firstChild;
       if (!menu.isConnected || !S.gameVersions.length) return;
       const current = menu.value;
-      menu.replaceChildren(...versionOptions(current, blank).map(([v, label]) => h('option', { value: v, selected: v === current }, label)));
+      fill(menu, ...versionOptions(current, blank).map(([v, label]) => h('option', { value: v, selected: v === current }, label)));
     });
   }
   return el;
@@ -167,7 +173,7 @@ function toast(title, text, { tone = 'yellow', icon, time = 5000 } = {}) {
     slot(icon || Pixel.icon('logo'), 48),
     h('div', { class: 'msg' }, h('div', { class: tone }, title), text && h('div', {}, text)));
   if (!icon) el.querySelector('img').className = 'px';
-  $('#toasts').append(el);
+  add($('#toasts'), el);
   setTimeout(() => {
     el.classList.add('out');
     setTimeout(() => el.remove(), 300); // not tied to the animation, which never ends in a hidden window
@@ -181,14 +187,13 @@ function drawJobs() {
   const box = $('#jobs');
   if (!box) return;
   const active = [...jobs.values()];
-  if (!active.length) { box.replaceChildren(); return; }
+  if (!active.length) { fill(box); return; }
   const j = active[active.length - 1];
   const pct = j.total ? Math.min(100, Math.round((j.received / j.total) * 100)) : 0;
-  const fill = h('i');
-  fill.style.width = pct + '%';
-  box.replaceChildren(
-    h('div', { class: 'job-name' }, `Downloading ${j.filename}${active.length > 1 ? ` (+${active.length - 1} more)` : ''}`),
-    h('div', { class: 'job-line' }, h('div', { class: 'xp' }, fill), h('span', {}, j.total ? `${pct}%` : fmtSize(j.received))));
+  const bar = h('i');
+  bar.style.width = pct + '%';
+  fill(box, h('div', { class: 'job-name' }, `Downloading ${j.filename}${active.length > 1 ? ` (+${active.length - 1} more)` : ''}`),
+    h('div', { class: 'job-line' }, h('div', { class: 'xp' }, bar), h('span', {}, j.total ? `${pct}%` : fmtSize(j.received))));
 }
 
 // The background check of the instance's files finished: what counts as installed may have grown.
@@ -222,7 +227,7 @@ function showScreen(title, body, buttons, onClose) {
   const o = $('#overlay');
   o.className = '';
   o.onclick = null;
-  o.replaceChildren(h('div', { class: 'modal' },
+  fill(o, h('div', { class: 'modal' },
     h('div', { class: 'modal-title' }, title), body, h('div', { class: 'screen-buttons' }, buttons)));
   o.hidden = false;
   screenClose = onClose || null;
@@ -235,7 +240,7 @@ function closeScreen() {
   if (o.hidden) return;
   o.hidden = true;
   o.onclick = null;
-  o.replaceChildren();
+  fill(o);
   const cb = screenClose;
   screenClose = null;
   if (cb) cb();
@@ -256,7 +261,7 @@ function lightbox(src) {
   supersede();
   const o = $('#overlay');
   o.className = 'lightbox';
-  o.replaceChildren(h('img', { src, alt: '' }));
+  fill(o, h('img', { src, alt: '' }));
   o.hidden = false;
   o.onclick = closeScreen;
 }
@@ -283,8 +288,7 @@ function renderRail() {
   const P = S.view === 'project' ? S.project : null;
   const item = (on, icon, label, onclick) =>
     h('button', { class: `nav-item ${on ? 'on' : ''}`, onclick }, h('img', { class: 'px', alt: '', src: Pixel.icon(icon) }), h('span', {}, label));
-  $('#rail').replaceChildren(
-    h('div', { class: 'brand' },
+  fill($('#rail'), h('div', { class: 'brand' },
       h('img', { class: 'px', alt: '', src: Pixel.icon('logo') }),
       h('div', {}, h('div', { class: 'brand-name' }, 'Modion'), h('div', { class: 'faint small' }, 'Mod manager'))),
     item(S.view === 'instances', 'logo', 'Instances', () => go('instances')),
@@ -327,7 +331,7 @@ function renderTop() {
     title = 'Settings';
     tabs = [tab('General', true, () => {})];
   }
-  $('#top').replaceChildren(h('div', { class: 'title' }, back, h('span', {}, title)), h('div', { class: 'tabs' }, tabs));
+  fill($('#top'), h('div', { class: 'title' }, back, h('span', {}, title)), h('div', { class: 'tabs' }, tabs));
 }
 
 // Bottom bar, as in the launcher's Play tab: instance picker on the left, the big green
@@ -363,7 +367,7 @@ function renderBottom() {
     action = h('div', { class: 'action' }, play,
       h('div', { class: 'faint small' }, inst.launch.play ? `via ${inst.launch.label}` : `${inst.launch.label} starts this instance`));
   }
-  $('#bottom').replaceChildren(picker, action, h('div', { id: 'jobs' }));
+  fill($('#bottom'), picker, action, h('div', { id: 'jobs' }));
   drawJobs();
 }
 
@@ -420,7 +424,7 @@ function render() {
   renderTop();
   renderBottom();
   const v = $('#view');
-  v.replaceChildren();
+  fill(v);
   ({ browse: viewBrowse, project: viewProject, library: viewLibrary, settings: viewSettings, instances: viewInstances })[S.view](v);
 }
 
@@ -537,8 +541,8 @@ async function loadResults() {
   const token = ++searchToken;
   const list = $('#results'), pager = $('#pager');
   if (!list) return; // not on screen: the browse view searches again when it is next shown
-  list.replaceChildren(loading(`Searching ${SOURCES[b.source]}...`));
-  pager.replaceChildren();
+  fill(list, loading(`Searching ${SOURCES[b.source]}...`));
+  fill(pager);
   let res = null, error = null;
   try {
     const { source, type, query, gameVersion, loader, category, sort, page } = b;
@@ -556,12 +560,12 @@ async function loadResults() {
   const now = $('#results'); // the view may have been redrawn since the search started
   if (!now) return;
   if (error && (error.code === 'NO_CF_KEY' || error.code === 'BAD_CF_KEY')) {
-    now.replaceChildren(message(
+    fill(now, message(
       h('p', { class: 'yellow' }, error.code === 'NO_CF_KEY' ? 'CurseForge needs an API key' : 'CurseForge rejected the API key'),
       h('p', { class: 'dim' }, 'CurseForge only lets apps browse with a key. You can get a free one and paste it into Settings.'),
       btn('Open Settings', () => go('settings'), 'green')));
   } else {
-    now.replaceChildren(message(h('p', { class: 'red' }, error ? error.message : 'The search returned nothing usable.'), btn('Try Again', loadResults)));
+    fill(now, message(h('p', { class: 'red' }, error ? error.message : 'The search returned nothing usable.'), btn('Try Again', loadResults)));
   }
 }
 
@@ -569,7 +573,7 @@ function drawResults() {
   const b = S.browse, res = b.results;
   const list = $('#results'), pager = $('#pager');
   if (!list || !res) return;
-  list.replaceChildren(...(res.hits.length ? res.hits.map(hitRow) : [message(h('p', { class: 'dim' }, 'Nothing found. Try fewer filters.'))]));
+  fill(list, ...(res.hits.length ? res.hits.map(hitRow) : [message(h('p', { class: 'dim' }, 'Nothing found. Try fewer filters.'))]));
   list.scrollTop = b.scroll;
   b.scroll = 0;
   const total = Number(res.total) || 0;
@@ -578,8 +582,7 @@ function drawResults() {
   const prev = btn('< Prev', turn(-1), 'small'), next = btn('Next >', turn(1), 'small');
   prev.disabled = b.page <= 0;
   next.disabled = b.page >= pages - 1;
-  pager.replaceChildren(
-    h('div', { class: 'dim' }, `${total.toLocaleString()} result${total === 1 ? '' : 's'}`),
+  fill(pager, h('div', { class: 'dim' }, `${total.toLocaleString()} result${total === 1 ? '' : 's'}`),
     h('div', { class: 'bar' }, prev, h('span', {}, `Page ${b.page + 1} of ${pages.toLocaleString()}`), next),
     h('div'));
 }
@@ -616,14 +619,13 @@ function viewBrowse(v) {
       if (!Array.isArray(list)) return;
       categoryLists.set(catKey, list);
       const menu = category.firstChild;
-      if (menu.isConnected) menu.replaceChildren(...catOptions().map(([val, label]) => h('option', { value: val, selected: val === b.category }, label)));
+      if (menu.isConnected) fill(menu, ...catOptions().map(([val, label]) => h('option', { value: val, selected: val === b.category }, label)));
     }).catch(() => {}); // e.g. CurseForge without a key: the menu just stays at "Any category"
   }
   // Browsing for a different version or loader than the selected instance is allowed, but flagged.
   const inst = activeInst();
   const mismatch = inst && ((inst.gameVersion && b.gameVersion !== inst.gameVersion) || (b.type === 'mod' && inst.loader && b.loader !== inst.loader));
-  v.append(
-    h('div', { class: 'bar' },
+  add(v, h('div', { class: 'bar' },
       search,
       category,
       versionSelect(b.gameVersion, 'Any version', (gameVersion) => change({ gameVersion })),
@@ -710,33 +712,33 @@ function viewProject(v) {
   }
 
   const content = h('div', { class: 'list' });
-  if (P.error) content.append(message(h('p', { class: 'red' }, P.error), btn('Try Again', () => openProject(P.hit, P.from))));
-  else if (!P.detail) content.append(loading());
+  if (P.error) add(content, message(h('p', { class: 'red' }, P.error), btn('Try Again', () => openProject(P.hit, P.from))));
+  else if (!P.detail) add(content, loading());
   else if (P.tab === 'description') {
     const prose = h('div', { class: 'prose' });
     try {
-      prose.append(Markdown.render(d.body || { format: 'markdown', text: '' }));
+      add(prose, Markdown.render(d.body || { format: 'markdown', text: '' }));
     } catch {
       // Never let a strange description take the page down: show it as plain text instead.
-      prose.replaceChildren(h('pre', {}, String((d.body && d.body.text) || '')));
+      fill(prose, h('pre', {}, String((d.body && d.body.text) || '')));
     }
-    if (!prose.childNodes.length) prose.append(h('p', { class: 'dim' }, 'This project has no description.'));
-    content.append(prose);
+    if (!prose.childNodes.length) add(prose, h('p', { class: 'dim' }, 'This project has no description.'));
+    add(content, prose);
   } else if (P.tab === 'gallery') {
-    content.append(Array.isArray(d.gallery) && d.gallery.length
+    add(content, Array.isArray(d.gallery) && d.gallery.length
       ? h('div', { class: 'gallery' }, d.gallery.map((g) =>
         h('figure', { class: 'shot', onclick: () => lightbox(g.full || g.url) },
           h('img', { src: g.url, alt: g.title || '', loading: 'lazy' }),
           g.title && h('figcaption', { class: 'dim' }, g.title))))
       : message(h('p', { class: 'dim' }, 'No screenshots.')));
   } else if (P.tab === 'versions') {
-    if (!P.versions) { content.append(loading('Loading files...')); }
-    else if (P.versions.error) content.append(message(h('p', { class: 'red' }, P.versions.error), btn('Try Again', () => { P.wanted = null; render(); })));
+    if (!P.versions) { add(content, loading('Loading files...')); }
+    else if (P.versions.error) add(content, message(h('p', { class: 'red' }, P.versions.error), btn('Try Again', () => { P.wanted = null; render(); })));
     else if (!P.versions.length) {
-      content.append(message(
+      add(content, message(
         h('p', { class: 'dim' }, P.compatible ? `No files for ${targetLabel(t)}.` : 'No files.'),
         P.compatible && btn('Show All Files', () => { P.compatible = false; render(); })));
-    } else content.append(...P.versions.map((ver) => versionRow(d, ver)));
+    } else add(content, ...P.versions.map((ver) => versionRow(d, ver)));
   }
 
   const hasFilter = Boolean(t.gameVersion || t.loader);
@@ -744,7 +746,7 @@ function viewProject(v) {
   const link = (label, href) => href && h('a', { href }, label);
   const L = d.links || {};
 
-  v.append(h('div', { class: 'proj' },
+  add(v, h('div', { class: 'proj' },
     h('div', { class: 'proj-main' },
       h('div', { class: 'proj-head' },
         slot(d.icon, 96),
@@ -784,11 +786,11 @@ function viewLog(v, inst) {
   const out = h('div', { class: 'log' });
   const box = h('div', { class: 'list' }, out);
   const follow = check('Follow', true, () => { if (follow.firstChild.checked) box.scrollTop = box.scrollHeight; });
-  v.append(h('div', { class: 'bar' }, h('span', {}, `Game log of ${inst.name}`), where, h('div', { class: 'push' }, follow)), box);
+  add(v, h('div', { class: 'bar' }, h('span', {}, `Game log of ${inst.name}`), where, h('div', { class: 'push' }, follow)), box);
   box.addEventListener('scroll', () => { follow.firstChild.checked = box.scrollHeight - box.scrollTop - box.clientHeight < 40; });
 
   let source = '', offset = 0, waiting = false, empty = true;
-  const note = (text) => { out.replaceChildren(h('div', { class: 'faint' }, text)); empty = true; };
+  const note = (text) => { fill(out, h('div', { class: 'faint' }, text)); empty = true; };
   note('Waiting for the game to write a log...');
   const poll = async () => {
     if (waiting || !out.isConnected) return;
@@ -802,11 +804,11 @@ function viewLog(v, inst) {
     offset = r.offset;
     where.textContent = r.source ? '\u200e' + r.source : '';
     if (!r.text) return;
-    if (empty) { out.replaceChildren(); empty = false; }
+    if (empty) { fill(out); empty = false; }
     for (const line of r.text.split('\n')) {
       if (!line) continue;
       const tone = /\b(ERROR|FATAL|Exception|Caused by)\b|^\s+at /.test(line) ? 'err' : /\bWARN\b/.test(line) ? 'warn' : '';
-      out.append(h('div', { class: tone }, line));
+      add(out, h('div', { class: tone }, line));
     }
     while (out.childElementCount > LOG_LINES) out.firstChild.remove();
     if (follow.firstChild.checked) box.scrollTop = box.scrollHeight;
@@ -821,7 +823,7 @@ function viewLibrary(v) {
   const inst = activeInst();
   const lib = S.library;
   if (!inst) {
-    v.append(h('div', { class: 'list' }, message(
+    add(v, h('div', { class: 'list' }, message(
       h('p', {}, 'No instance selected'),
       h('p', { class: 'dim' }, 'An instance is a Minecraft game folder. Modion installs into it and lists what is inside.'),
       btn('Select Instance...', () => openInstances()))));
@@ -830,8 +832,7 @@ function viewLibrary(v) {
   if (lib.type === 'log') { viewLog(v, inst); return; }
   const list = h('div', { class: 'list' }, loading('Reading folder...'));
   const summary = h('span', { class: 'dim' });
-  v.append(
-    h('div', { class: 'bar' }, summary,
+  add(v, h('div', { class: 'bar' }, summary,
       h('div', { class: 'push' }, btn('Open Folder', () => api('library.openFolder', { type: lib.type }).catch(fail)))),
     list);
 
@@ -845,18 +846,18 @@ function viewLibrary(v) {
     if (stale() || mine !== latest) return;
     if (!res || !Array.isArray(res.files)) {
       summary.textContent = '';
-      list.replaceChildren(message(h('p', { class: 'red' }, error ? error.message : 'The folder could not be read.'), btn('Try Again', refresh)));
+      fill(list, message(h('p', { class: 'red' }, error ? error.message : 'The folder could not be read.'), btn('Try Again', refresh)));
       return;
     }
     const off = res.files.filter((f) => !f.enabled).length;
     summary.textContent = `${res.files.length} file${res.files.length === 1 ? '' : 's'}${off ? `, ${off} disabled` : ''}`;
     if (!res.files.length) {
-      list.replaceChildren(message(
+      fill(list, message(
         h('p', {}, `No ${TYPES[type].toLowerCase()} in this instance yet`),
         btn(`Browse ${TYPES[type]}`, () => { invalidateResults({ type, category: '' }); go('browse'); })));
       return;
     }
-    list.replaceChildren(...res.files.map((f) => {
+    fill(list, ...res.files.map((f) => {
       const m = f.meta;
       const title = h('div', { class: `row-title ${f.enabled ? '' : 'faint'}` }, m ? m.title : f.name);
       const open = m && (() => openProject({ source: m.source, id: m.projectId, type, title: m.title, icon: m.icon, summary: '' }, 'library'));
@@ -938,7 +939,7 @@ function viewSettings(v) {
       ? (who ? `Play starts the game as ${who.name}.` : 'Not signed in yet, so Play still goes through Prism Launcher. Sign in below.')
       : (/^\w{3,16}$/.test(S.cfg.offlineName || '') ? `Play starts the game offline as ${S.cfg.offlineName}. Online servers will refuse an offline player.` : 'Enter a player name (3 to 16 letters, digits or underscores) to use offline mode.');
 
-  v.append(h('div', { class: 'settings' },
+  add(v, h('div', { class: 'settings' },
     h('div', { class: 'panel' },
       h('h2', {}, 'Starting the game'),
       h('div', { class: 'bar' }, select(modes, mode, (val) => setLaunch({ mode: val }))),
@@ -998,7 +999,7 @@ function openInstances({ autoDetect, start } = {}) {
       await onSave({ name: name.value, gameVersion, loader });
       save.disabled = false;
     }, 'green');
-    body.replaceChildren(h('div', { class: 'form' },
+    fill(body, h('div', { class: 'form' },
       initial.path && h('div', { class: 'full dim path' }, '\u200e' + initial.path),
       h('div', {}, 'Name'), name,
       h('div', {}, 'Game version'), versionSelect(gameVersion, 'Not set', (val) => { gameVersion = val; }),
@@ -1041,7 +1042,7 @@ function openInstances({ autoDetect, start } = {}) {
     footer(true);
     const mine = S.cfg.instances;
     // replaceChildren() would print a null argument as the text "null", so absent parts are filtered out.
-    body.replaceChildren(...[
+    fill(body, ...[
       h('div', { class: 'list' }, mine.length ? mine.map(instRow) : message(
         h('p', {}, 'No instances yet'),
         h('p', { class: 'dim' }, 'An instance is a Minecraft game folder (the one that holds "mods"). Create a new one, add one from your launchers, or pick a folder.'))),
@@ -1107,7 +1108,7 @@ function viewInstances(v) {
   if (S.instancesTab === 'log') {
     const inst = activeInst();
     if (inst) viewLog(v, inst);
-    else v.append(h('div', { class: 'list' }, message(h('p', {}, 'No instance selected'), h('p', { class: 'dim' }, 'Select an instance to see its game log.'))));
+    else add(v, h('div', { class: 'list' }, message(h('p', {}, 'No instance selected'), h('p', { class: 'dim' }, 'Select an instance to see its game log.'))));
     return;
   }
   const redraw = () => { if (S.view === 'instances') render(); };
@@ -1155,8 +1156,7 @@ function viewInstances(v) {
           : btn('Forget', () => change(api('instances.remove', { id: i.id }), 'Could not remove'), 'small')));
   };
 
-  v.append(
-    h('div', { class: 'bar' },
+  add(v, h('div', { class: 'bar' },
       btn('New Instance...', () => openInstances({ start: 'new' }), 'green'),
       importPack,
       btn('Add Existing...', () => openInstances({ autoDetect: true })),
