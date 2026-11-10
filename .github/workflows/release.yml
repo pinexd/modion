@@ -41,6 +41,7 @@ jobs:
       DRAFT: ${{ inputs.draft }}
       PRERELEASE: ${{ inputs.prerelease }}
       CURSEFORGE_KEY: ${{ secrets.CURSEFORGE_KEY }}
+      SIGNING_KEY_B64: ${{ secrets.RELEASE_SIGNING_KEY_B64 }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +78,23 @@ jobs:
       - name: Create the release
         run: |
           printf '%s\n' "$NOTES" > notes.md
-          args=(--target "$GITHUB_SHA" --title "${TITLE:-Modion $TAG}" --notes-file notes.md)
+          args=(--title "${TITLE:-Modion $TAG}" --notes-file notes.md)
+          # With a signing key, the tag is signed so GitHub shows the release as Verified.
+          # The matching public key must be a *signing* key on the account named below.
+          if [ -n "$SIGNING_KEY_B64" ]; then
+            KEY="$RUNNER_TEMP/release_signing_key"
+            (umask 077; printf '%s' "$SIGNING_KEY_B64" | base64 -d > "$KEY"; echo >> "$KEY")
+            git config user.name pine
+            git config user.email 105119099+pinexd@users.noreply.github.com
+            git config gpg.format ssh
+            git config user.signingkey "$KEY"
+            git tag -s "$TAG" -m "${TITLE:-Modion $TAG}"
+            git push origin "refs/tags/$TAG"
+            rm -f "$KEY"
+          else
+            echo "::warning::No RELEASE_SIGNING_KEY_B64 secret is set; the release tag is unsigned."
+            args+=(--target "$GITHUB_SHA")
+          fi
           [ "$DRAFT" = "true" ] && args+=(--draft)
           [ "$PRERELEASE" = "true" ] && args+=(--prerelease)
           gh release create "$TAG" "$ASSET" "$ASSET.sha256" "${args[@]}"
