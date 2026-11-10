@@ -12,6 +12,7 @@ const curseforge = require('./src/curseforge');
 const instances = require('./src/instances');
 const content = require('./src/content');
 const launcher = require('./src/launcher');
+const libraries = require('./src/libraries');
 const { Account, GUID, CLIENT_ID } = require('./src/account');
 // The application ID used for sign-in: Modion's own, unless Settings names another.
 const clientId = () => store.config.msClientId || CLIENT_ID;
@@ -109,9 +110,17 @@ function publicConfig() {
     // `launch` says how each instance can be started: { play, label }, or null when it cannot.
     instances: list.map((i) => {
       const how = howToLaunch(i);
-      return { ...i, launch: how ? { play: how.play, label: how.label } : null };
+      // `movable`: an instance of Modion's own kind, which can be moved to another folder.
+      return { ...i, launch: how ? { play: how.play, label: how.label } : null, movable: Boolean(i.managed && libraries.isOwn(i.home)) };
     }),
-    canCreate: launcher.canCreate(),
+    canCreate: store.config.launchMode !== 'prism' || launcher.canCreate(),
+    // Folders holding the instances Modion made itself; new ones go into the default one.
+    libraries: store.config.libraries.map((dir) => ({
+      path: dir,
+      isDefault: dir === store.config.newInstanceDir,
+      exists: libraries.isDir(dir),
+      count: list.filter((i) => i.managed && i.home && path.dirname(i.home) === dir).length,
+    })),
     launchMode: store.config.launchMode,
     openLogOnLaunch: store.config.openLogOnLaunch,
     offlineName: store.config.offlineName,
@@ -135,40 +144,141 @@ function cleanInstance(input, base) {
   };
 }
 
-// Makes the folders for a new instance. It goes into Prism Launcher when Prism is what will
-// start it (the Prism setting, or a loader Modion cannot start itself), otherwise into
-// Modion's own instances folder.
+// Makes the folders for a new instance. With the Prism setting it becomes a Prism Launcher
+// instance; with either "start directly" setting it goes into Modion's own default library.
 async function makeInstance(spec) {
-  const direct = game.supports(spec);
-  if (launcher.canCreate() && (store.config.launchMode === 'prism' || !direct)) return launcher.create(spec);
-  if (!direct) throw new ApiError('Forge, NeoForge and versions before 1.19 need Prism Launcher, which was not found on this computer.', 'NO_PRISM');
+  if (store.config.launchMode === 'prism') {
+    if (!launcher.canCreate()) {
+      throw new ApiError('Prism Launcher was not found on this computer. To have Modion keep and start instances itself, change "Starting the game" in Settings.', 'NO_PRISM');
+    }
+    return launcher.create(spec);
+  }
+  if (!game.supports(spec)) {
+    throw new ApiError('Modion can only start vanilla, Fabric and Quilt on Minecraft 1.19 and newer itself. For this one, set "Starting the game" in Settings to Prism Launcher and create it there.', 'UNSUPPORTED');
+  }
   await game.versionJson(spec.gameVersion); // fails for a version Mojang does not have
-  return launcher.createOwn(spec, game.ROOT);
+  return launcher.createOwn(spec, libraries.usable(store.config.newInstanceDir));
 }
 
 function adopt(made, spec) {
   offered.add(made.path);
-  const inst = { id: crypto.randomUUID(), path: made.path, name: made.name, gameVersion: spec.gameVersion, loader: spec.loader, managed: true, home: made.home };
+  const inst = { id: made.id || crypto.randomUUID(), path: made.path, name: made.name, gameVersion: spec.gameVersion, loader: spec.loader, managed: true, home: made.home };
   store.config.instances.push(inst);
   store.config.activeInstanceId = inst.id;
   store.saveConfig();
   return inst;
 }
 
-// An instance Modion made, whose folder is still exactly where Modion puts instances.
+// An instance Modion made: one of its own kind (wherever it was moved to), or a Prism
+// instance still sitting directly in Prism's instances folder.
 function managed(idValue) {
   const inst = store.instance(idValue);
   if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
-  const ok = inst.managed && inst.home
-    && launcher.managedRoots(game.ROOT).includes(path.dirname(inst.home))
-    && inst.path.startsWith(inst.home + path.sep);
+  const ok = inst.managed && inst.home && inst.path.startsWith(inst.home + path.sep)
+    && (libraries.isOwn(inst.home) || launcher.prismRoots().includes(path.dirname(inst.home)));
   if (!ok) throw new ApiError('Modion only renames and deletes instances it created.', 'NOT_MANAGED');
   return inst;
 }
 
-function forget(idValue) {
+// One of Modion's own instances, which can be moved; refuses while its game is open.
+function movable(inst) {
+  if (!inst.managed || !libraries.isOwn(inst.home)) throw new ApiError('Only instances Modion keeps itself can be moved. A Prism Launcher instance has to stay in Prism\'s folder.', 'NOT_MANAGED');
+  if (game.inUse(inst.path)) throw new ApiError(`"${inst.name}" is running. Close the game before moving it.`, 'BUSY');
+  return inst;
+}
+
+function relocated(inst, home) {
+  inst.home = home;
+  inst.path = path.join(home, libraries.GAME);
+  offered.add(inst.path);
+}
+
+// Reads every library folder and brings the instance list in line with what is there:
+// new folders are added, and an instance whose folder turned up somewhere else (the ID
+// in its instance.json says which one it is) is followed to its new place.
+function indexLibraries() {
+  const list = store.config.instances;
+  const seen = new Set();
+  let changed = false;
+  for (const dir of store.config.libraries) {
+    for (const f of libraries.scan(dir)) {
+      let inst = list.find((i) => i.managed && i.home === f.home);
+      if (!inst && typeof f.meta.id === 'string') {
+        const same = list.find((i) => i.id === f.meta.id && i.managed && !seen.has(i.id));
+        if (same && !libraries.exists(same.home)) { inst = same; relocated(inst, f.home); changed = true; }
+      }
+      if (!inst) {
+        const wanted = typeof f.meta.id === 'string' && /^[\w-]{8,64}$/.test(f.meta.id) && !store.instance(f.meta.id) ? f.meta.id : crypto.randomUUID();
+        inst = {
+          id: wanted,
+          path: f.path,
+          name: text(f.meta.name, 80) || path.basename(f.home),
+          gameVersion: text(f.meta.gameVersion, 32),
+          loader: oneOf(f.meta.loader, LOADERS, ''),
+          managed: true,
+          home: f.home,
+        };
+        list.push(inst);
+        changed = true;
+      }
+      seen.add(inst.id);
+      if (f.meta.id !== inst.id) { try { libraries.writeMeta(f.home, { ...f.meta, id: inst.id }); } catch {} }
+    }
+  }
+  if (changed) {
+    if (!store.active()) store.config.activeInstanceId = list[0] ? list[0].id : null;
+    store.saveConfig();
+  }
+}
+
+function addLibrary(dir) {
+  libraries.usable(dir);
+  if (!store.config.libraries.includes(dir)) store.config.libraries.push(dir);
+}
+
+async function pickFolder(title, defaultPath) {
+  const pick = await dialog.showOpenDialog(liveWindow(), { title, defaultPath, properties: ['openDirectory', 'createDirectory', 'showHiddenFiles'] });
+  return pick.canceled || !pick.filePaths[0] ? null : path.resolve(pick.filePaths[0]);
+}
+
+function knownLibrary(v) {
+  const dir = path.resolve(text(v, 4096) || '/nonexistent');
+  if (!store.config.libraries.includes(dir)) throw new ApiError('That folder is not one of the instance libraries.', 'GONE');
+  return dir;
+}
+
+// The app's own data folder was ~/.local/share/modion and held the instances too. It is now
+// ModionApp, and the instances have a folder of their own (the default library).
+function migrateData() {
+  const old = path.join(path.dirname(libraries.APP_DATA), 'modion');
+  try {
+    const ours = ['versions', 'libraries', 'assets', 'instances'].some((n) => libraries.isDir(path.join(old, n)));
+    if (ours && !libraries.exists(libraries.APP_DATA)) fs.renameSync(old, libraries.APP_DATA);
+  } catch (e) {
+    console.error('Could not rename the data folder:', e.message);
+    return;
+  }
+  const from = path.join(libraries.APP_DATA, 'instances');
+  let names;
+  try { names = fs.readdirSync(from); } catch { return; }
+  for (const name of names) {
+    const was = path.join(from, name), to = path.join(libraries.DEFAULT, name);
+    if (!libraries.isDir(was) || libraries.exists(to)) continue;
+    try {
+      fs.mkdirSync(libraries.DEFAULT, { recursive: true });
+      fs.renameSync(was, to);
+    } catch { continue; }
+    for (const inst of store.config.instances) {
+      if (inst.home === was || inst.home === path.join(old, 'instances', name)) relocated(inst, to);
+    }
+  }
+  try { fs.rmdirSync(from); } catch {} // only if it is empty now
+  store.saveConfig();
+}
+
+function forget(idValue, { keepRecords } = {}) {
   store.config.instances = store.config.instances.filter((i) => i.id !== idValue);
-  delete store.manifest[idValue];
+  if (!keepRecords) delete store.manifest[idValue];
   if (!store.active()) store.config.activeInstanceId = store.config.instances[0] ? store.config.instances[0].id : null;
   store.saveConfig();
   store.saveManifest();
@@ -381,7 +491,7 @@ const methods = {
     return publicConfig();
   },
 
-  // Makes a new Prism Launcher instance and selects it.
+  // Makes a new instance (see makeInstance for where) and selects it.
   'instances.create': async (a) => {
     const spec = { name: text(a.name, 80), gameVersion: text(a.gameVersion, 32), loader: oneOf(a.loader, LOADERS, '') };
     adopt(await makeInstance(spec), spec);
@@ -418,6 +528,97 @@ const methods = {
       pack.zip.close();
       emit({ ...job, state: 'done' });
     }
+  },
+
+  // Moves one of Modion's own instances into a folder the person picks.
+  'instances.move': async (a) => {
+    const found = store.instance(a.id);
+    if (!found) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    const inst = movable(found);
+    const dest = await pickFolder(`Move "${inst.name}" into which folder?`, path.dirname(inst.home));
+    if (!dest) return null;
+    if (dest === path.dirname(inst.home)) throw new ApiError('The instance is already in that folder.', 'BAD_PATH');
+    if (libraries.within(inst.home, dest)) throw new ApiError('An instance cannot be moved into itself.', 'BAD_PATH');
+    libraries.usable(dest);
+    const to = path.join(dest, path.basename(inst.home));
+    await libraries.move(inst.home, to);
+    relocated(inst, to);
+    store.saveConfig();
+    return publicConfig();
+  },
+
+  'libraries.rescan': () => { indexLibraries(); return publicConfig(); },
+
+  'libraries.add': async () => {
+    const dir = await pickFolder('Add a folder of Modion instances');
+    if (!dir) return null;
+    addLibrary(dir);
+    store.saveConfig();
+    indexLibraries();
+    return publicConfig();
+  },
+
+  // Where new instances are created. A folder picked here joins the libraries.
+  'libraries.setDefault': async (a) => {
+    const dir = a.path ? knownLibrary(a.path) : await pickFolder('Choose where new instances are created', store.config.newInstanceDir);
+    if (!dir) return null;
+    addLibrary(dir);
+    store.config.newInstanceDir = dir;
+    store.saveConfig();
+    indexLibraries();
+    return publicConfig();
+  },
+
+  // Stops indexing a folder. Its instances leave the list; nothing on disk is touched.
+  'libraries.remove': (a) => {
+    const dir = knownLibrary(a.path);
+    if (dir === store.config.newInstanceDir) throw new ApiError('New instances are created in this folder. Choose another folder for new instances first.', 'IN_USE');
+    store.config.libraries = store.config.libraries.filter((d) => d !== dir);
+    // Their records are kept, so adding the folder again brings them back as they were.
+    for (const i of store.config.instances.filter((x) => x.managed && x.home && path.dirname(x.home) === dir && libraries.isOwn(x.home))) forget(i.id, { keepRecords: true });
+    store.saveConfig();
+    return publicConfig();
+  },
+
+  // Moves every instance in a library to a new folder, which takes the library's place.
+  'libraries.relocate': async (a) => {
+    const dir = knownLibrary(a.path);
+    const dest = await pickFolder('Move this library and its instances to which folder?', path.dirname(dir));
+    if (!dest) return null;
+    if (dest === dir) throw new ApiError('That is where the library already is.', 'BAD_PATH');
+    if (libraries.within(dir, dest)) throw new ApiError('A library cannot be moved into itself.', 'BAD_PATH');
+    libraries.usable(dest);
+    indexLibraries();
+    const found = libraries.scan(dir);
+    // Everything is checked before anything is moved.
+    for (const f of found) {
+      const inst = store.config.instances.find((i) => i.home === f.home);
+      if (inst && game.inUse(inst.path)) throw new ApiError(`"${inst.name}" is running. Close the game before moving its library.`, 'BUSY');
+      if (libraries.exists(path.join(dest, path.basename(f.home)))) {
+        throw new ApiError(`${dest} already has a folder named "${path.basename(f.home)}". Nothing was moved.`, 'EXISTS');
+      }
+    }
+    const swap = () => {
+      store.config.libraries = [...new Set(store.config.libraries.map((d) => (d === dir ? dest : d)))];
+      if (store.config.newInstanceDir === dir) store.config.newInstanceDir = dest;
+      store.saveConfig();
+    };
+    let moved = 0;
+    try {
+      for (const f of found) {
+        const to = path.join(dest, path.basename(f.home));
+        await libraries.move(f.home, to);
+        const inst = store.config.instances.find((i) => i.home === f.home);
+        if (inst) relocated(inst, to);
+        moved++;
+      }
+    } catch (e) {
+      // Some instances may already be in the new place: keep both folders listed so none is lost from view.
+      if (moved) { addLibrary(dest); store.saveConfig(); }
+      throw e;
+    }
+    swap();
+    return { config: publicConfig(), moved };
   },
 
   'instances.rename': (a) => {
@@ -567,7 +768,9 @@ app.on('second-instance', () => {
 const ready = !first ? Promise.resolve(null) : app.whenReady().then(() => {
   const dir = app.getPath('userData');
   adoptLegacySettings(dir);
-  store = new Store(dir);
+  store = new Store(dir, libraries.DEFAULT);
+  migrateData();
+  indexLibraries();
   const keyring = safeStorage.isEncryptionAvailable();
   account = new Account({
     dir,

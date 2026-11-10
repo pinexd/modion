@@ -1,7 +1,7 @@
 'use strict';
-// Creating and starting instances. Modion does not sign in to Minecraft or download the
-// game itself: it writes a Prism Launcher instance and asks Prism to run it, so the
-// account, Java and game files are the ones Prism already manages.
+// Creating instances, and starting them through the launcher that owns them. For Prism
+// Launcher, Modion writes a Prism instance and asks Prism to run it, so the account, Java
+// and game files are the ones Prism already manages. (Starting the game directly is game.js.)
 
 const fs = require('fs');
 const os = require('os');
@@ -152,16 +152,18 @@ function check({ gameVersion, loader }) {
   if (loader && !Object.hasOwn(LOADER_UID, loader)) throw new ApiError('Unknown mod loader.', 'BAD_REQUEST');
 }
 
-// An instance in Modion's own folder, for when Modion starts the game itself.
-function createOwn({ name, gameVersion, loader }, root) {
+// An instance of Modion's own kind, inside the given library folder, for when Modion
+// starts the game itself.
+function createOwn({ name, gameVersion, loader }, library) {
   check({ gameVersion, loader });
   const clean = cleanName(name, gameVersion, loader);
-  const dir = freshFolder(path.join(root, 'instances'), clean);
+  const dir = freshFolder(library, clean);
+  const id = require('crypto').randomUUID();
   try {
     const game = path.join(dir, 'minecraft');
     fs.mkdirSync(game);
-    fs.writeFileSync(path.join(dir, 'instance.json'), JSON.stringify({ name: clean, gameVersion, loader: loader || '' }, null, 2));
-    return { path: game, name: clean, home: dir };
+    fs.writeFileSync(path.join(dir, 'instance.json'), JSON.stringify({ id, name: clean, gameVersion, loader: loader || '' }, null, 2));
+    return { id, path: game, name: clean, home: dir };
   } catch (e) {
     fs.rmSync(dir, { recursive: true, force: true }); // only ever the folder created just above
     throw new ApiError(`Could not write the new instance: ${e.code || e.message}.`, 'FS');
@@ -183,8 +185,8 @@ function rename(home, name) {
   }
 }
 
-// The folders in which Modion-made instances live; only direct children of these may be deleted.
-const managedRoots = (ownRoot) => [path.join(ownRoot, 'instances'), ...prismInstalls().map((p) => path.join(p.root, 'instances'))];
+// Prism's instance folders; a Prism instance Modion made is a direct child of one of these.
+const prismRoots = () => prismInstalls().map((p) => path.join(p.root, 'instances'));
 
 async function create({ name, gameVersion, loader, loaderVersion }) {
   const prism = prismInstalls()[0];
@@ -208,4 +210,4 @@ async function create({ name, gameVersion, loader, loaderVersion }) {
   }
 }
 
-module.exports = { canCreate, describe, launch, create, createOwn, rename, cleanName, managedRoots };
+module.exports = { canCreate, describe, launch, create, createOwn, rename, cleanName, prismRoots };

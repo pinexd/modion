@@ -317,3 +317,5 @@ a { color: var(--link); cursor: pointer; }
 .settings details { margin-top: 10px; }
 .settings summary { cursor: pointer; }
 .settings details .bar { margin-top: 8px; }
+
+.settings .list { flex: none; overflow: visible; margin: 8px 0; border: 1px solid var(--line); }

@@ -36,12 +36,18 @@ Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step
   forgotten, never renamed or deleted.
 - **Direct launching** – Modion can also start the game itself (vanilla, Fabric
   and Quilt on 1.19+), downloading the game, assets and Java from Mojang into
-  `~/.local/share/modion`. This needs a Microsoft sign-in (Settings, "Sign In
+  `~/.local/share/ModionApp`. This needs a Microsoft sign-in (Settings, "Sign In
   with Microsoft"): the sign-in page opens in your own web browser and Modion receives the
   result on a one-shot `http://localhost` listener, never your password. Settings has a
   "Starting the game" choice between Prism Launcher and starting directly. An offline mode exists for
   developing the launch code; it is locked to the developer's own computer and does not
   appear anywhere else.
+- **Instance libraries** – with either "start directly" setting, new instances are made in
+  Modion's own folder (`~/.local/share/Modion` unless Settings names another) instead of in
+  Prism. Settings lists these folders: add one, choose which receives new instances,
+  relocate one with everything in it, or remove it from the list. An instance carries its
+  identity in its `instance.json`, so a library moved by hand is recognised when its new
+  folder is added. Such instances also have a **Move** button on the Instances page.
 - **Browse** – pick Modrinth or CurseForge in the sidebar, a content type in the tabs. Results
   are filtered to the active instance's version and loader.
 - **Project page** – description, gallery and file list. *Install* takes the newest file that
@@ -76,6 +82,7 @@ finished in GitHub's editor before publishing.
 | `src/content.js` | Downloads (checksum-verified), dependencies, library management |
 | `src/instances.js` | Launcher detection |
 | `src/launcher.js` | Creating Prism instances and starting the game through Prism |
+| `src/libraries.js` | Instance libraries: the folders of Modion's own instances |
 | `src/game.js` | Downloading and starting the game directly |
 | `src/account.js` | Microsoft sign-in |
 | `src/webinstall.js` | The CurseForge page window that catches a manual download |

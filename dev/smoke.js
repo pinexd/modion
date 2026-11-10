@@ -415,19 +415,75 @@ require('../main.js').ready.then(async (win) => {
     await waitFor(`S.cfg.instances.length === ${count}`, 'delete');
     expect(!fs.existsSync(home), 'the instance folder is still there');
 
-    // With a setting where Modion starts the game itself, new instances live in Modion's own folder.
+    // With a setting where Modion starts the game itself, new instances live in Modion's own library.
     if (await js(`S.cfg.offlineAllowed`)) {
-      await js(`window.modion.call('settings.setLaunch', { mode: 'offline', offlineName: 'Tester_1' })`);
-      const made = await js(`window.modion.call('instances.create', { name: 'Own One', gameVersion: '1.21.1', loader: 'fabric' })`);
-      const own = path.join(work, 'data', 'modion', 'instances', 'Own One');
+      const call = (method, args = {}) => js(`window.modion.call('${method}', ${JSON.stringify(args)})`);
+      const data = path.join(work, 'data');
+      await call('settings.setLaunch', { mode: 'offline', offlineName: 'Tester_1' });
+      const made = await call('instances.create', { name: 'Own One', gameVersion: '1.21.1', loader: 'fabric' });
+      const own = path.join(data, 'Modion', 'Own One');
       expect(made.ok && fs.existsSync(path.join(own, 'minecraft')), `own instance not created: ${JSON.stringify(made).slice(0, 200)}`);
       const inst = made.data.instances[made.data.instances.length - 1];
-      expect(inst.launch && inst.launch.label === 'Modion, offline as Tester_1', `own instance launch: ${JSON.stringify(inst.launch)}`);
-      const forge = await js(`window.modion.call('instances.create', { name: 'Forge One', gameVersion: '1.20.1', loader: 'forge' })`);
-      expect(forge.ok && fs.existsSync(path.join(prismInstances, 'Forge One')), 'a Forge instance did not go to Prism');
-      for (const i of [inst, forge.data.instances[forge.data.instances.length - 1]]) await js(`window.modion.call('instances.delete', { id: '${i.id}' })`);
-      expect(!fs.existsSync(own) && !fs.existsSync(path.join(prismInstances, 'Forge One')), 'deleted instances left folders');
-      await js(`window.modion.call('settings.setLaunch', { mode: 'prism' })`);
+      expect(inst.launch && inst.launch.label === 'Modion, offline as Tester_1' && inst.movable, `own instance: ${JSON.stringify(inst)}`);
+      expect(JSON.parse(fs.readFileSync(path.join(own, 'instance.json'), 'utf8')).id === inst.id, 'the instance folder does not carry its ID');
+      const forge = await call('instances.create', { name: 'Forge One', gameVersion: '1.20.1', loader: 'forge' });
+      expect(!forge.ok && forge.code === 'UNSUPPORTED' && !fs.existsSync(path.join(prismInstances, 'Forge One')), 'a Forge instance was made although Modion cannot start it');
+      fs.writeFileSync(path.join(own, 'minecraft', 'world.dat'), 'precious');
+      const cfg = async () => (await call('config.get')).data;
+      const lib = (c, dir) => c.libraries.find((l) => l.path === dir);
+
+      // Moved by hand, then added as a library: the instance is found again, same ID.
+      const byHand = path.join(work, 'storage', 'modionstuff');
+      fs.mkdirSync(byHand, { recursive: true });
+      fs.renameSync(own, path.join(byHand, 'Own One'));
+      nextPick = byHand;
+      let c = (await call('libraries.add')).data;
+      let again = c.instances.find((i) => i.id === inst.id);
+      expect(again && again.home === path.join(byHand, 'Own One') && c.instances.filter((i) => i.name === 'Own One').length === 1, 'a library moved by hand was not picked up');
+      expect(lib(c, byHand).count === 1 && lib(c, path.join(data, 'Modion')).isDefault, `libraries: ${JSON.stringify(c.libraries)}`);
+
+      // Relocate the library: instances move, the library path follows.
+      const second = path.join(work, 'storage', 'second');
+      nextPick = second;
+      const moved = await call('libraries.relocate', { path: byHand });
+      c = moved.data.config;
+      again = c.instances.find((i) => i.id === inst.id);
+      expect(moved.ok && moved.data.moved === 1 && again.path === path.join(second, 'Own One', 'minecraft') && fs.readFileSync(path.join(again.path, 'world.dat'), 'utf8') === 'precious'
+        && !fs.existsSync(path.join(byHand, 'Own One')) && lib(c, second) && !lib(c, byHand), `relocate: ${JSON.stringify(moved).slice(0, 300)}`);
+      nextPick = second;
+      expect((await call('libraries.relocate', { path: second })).code === 'BAD_PATH', 'a library could be relocated onto itself');
+      nextPick = path.join(second, 'Own One', 'inner');
+      expect((await call('libraries.relocate', { path: second })).code === 'BAD_PATH', 'a library could be relocated into itself');
+
+      // The folder for new instances: choosing one adds it to the libraries, and it cannot be removed while in use.
+      const third = path.join(work, 'storage', 'third');
+      nextPick = third;
+      c = (await call('libraries.setDefault', {})).data;
+      expect(lib(c, third) && lib(c, third).isDefault && c.libraries.length === 3, `new default: ${JSON.stringify(c.libraries)}`);
+      expect((await call('libraries.remove', { path: third })).code === 'IN_USE', 'the folder for new instances could be removed');
+      const two = await call('instances.create', { name: 'Own Two', gameVersion: '1.21.1', loader: '' });
+      expect(two.ok && fs.existsSync(path.join(third, 'Own Two', 'minecraft')), 'a new instance did not go to the chosen folder');
+      const twoInst = two.data.instances[two.data.instances.length - 1];
+
+      // Move a single instance; a name clash is refused and nothing moves.
+      nextPick = second;
+      c = (await call('instances.move', { id: twoInst.id })).data;
+      expect(c.instances.find((i) => i.id === twoInst.id).home === path.join(second, 'Own Two') && fs.existsSync(path.join(second, 'Own Two', 'minecraft')) && !fs.existsSync(path.join(third, 'Own Two')), 'the instance was not moved');
+      fs.mkdirSync(path.join(third, 'Own Two'));
+      nextPick = third;
+      expect((await call('instances.move', { id: twoInst.id })).code === 'EXISTS' && fs.existsSync(path.join(second, 'Own Two', 'minecraft')), 'a move onto an existing folder was not refused');
+      expect((await call('instances.move', { id: foreign })).code === 'NOT_MANAGED', 'an instance from elsewhere could be moved');
+
+      // Removing a library takes its instances off the list and leaves the files alone.
+      await js(`api('config.get').then((c) => { setConfig(c); go('settings'); })`);
+      await waitFor(`[...document.querySelectorAll('.panel h2')].some((x) => x.textContent === 'Instance libraries') && document.querySelectorAll('.settings .list .row').length === 3`, 'libraries panel');
+      await shot('17-libraries');
+      await js(`go('instances')`);
+      await waitFor(`[...document.querySelectorAll('#view .row .btn')].filter((x) => x.textContent === 'Move...').length === 2`, 'Move buttons');
+      c = (await call('libraries.remove', { path: second })).data;
+      expect(!c.instances.some((i) => i.id === inst.id || i.id === twoInst.id) && fs.existsSync(path.join(second, 'Own One', 'minecraft', 'world.dat')), 'removing a library did not just unlist its instances');
+      await call('settings.setLaunch', { mode: 'prism' });
+      await js(`api('config.get').then((c) => setConfig(c))`);
     }
     await js(`api('instances.setActive', { id: '${foreign}' }).then((c) => { setConfig(c); go('browse'); })`);
   });

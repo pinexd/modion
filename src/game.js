@@ -15,7 +15,7 @@ const crypto = require('crypto');
 const { getJson, ApiError, arr } = require('./http');
 const { download } = require('./content');
 
-const ROOT = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'modion');
+const ROOT = require('./libraries').APP_DATA; // ~/.local/share/ModionApp
 const MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
 const RUNTIMES = 'https://piston-meta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json';
 const ASSETS = 'https://resources.download.minecraft.net';
@@ -244,6 +244,9 @@ function launchArgs({ game, profile, classpath }, inst, session) {
 const outputLog = (gameDir) => path.join(ROOT, 'logs', `${crypto.createHash('sha1').update(gameDir).digest('hex').slice(0, 12)}.log`);
 
 const running = new Set(); // instance paths being prepared or just started
+const live = new Set();    // instance paths whose game, started from here, is still open
+// Is the game for this folder being started or running (as far as this session knows)?
+const inUse = (gameDir) => running.has(gameDir) || live.has(gameDir);
 
 // session: { name, uuid, token, offline? }. Resolves once the game process has stayed up
 // for a few seconds; a crash on startup is reported with the end of its log.
@@ -287,6 +290,8 @@ async function launch(inst, session, emit) {
       throw new ApiError(`Minecraft stopped right after starting (${outcome.error || `exit ${outcome.code ?? outcome.signal}`}). ${tail}`.trim(), 'CRASHED');
     }
     child.unref();
+    live.add(inst.path);
+    child.once('exit', () => live.delete(inst.path));
     return { label: 'Modion', play: true, pid: child.pid, log: logFile };
   } finally {
     running.delete(inst.path);
@@ -301,4 +306,4 @@ function offlineSession(name) {
   return { name, uuid: h.toString('hex'), token: '0', offline: true };
 }
 
-module.exports = { supports, launch, outputLog, offlineSession, fetchAll, versionJson, ROOT };
+module.exports = { supports, launch, inUse, outputLog, offlineSession, fetchAll, versionJson, ROOT };

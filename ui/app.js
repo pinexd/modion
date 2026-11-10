@@ -939,6 +939,41 @@ function viewSettings(v) {
       ? (who ? `Play starts the game as ${who.name}.` : 'Not signed in yet, so Play still goes through Prism Launcher. Sign in below.')
       : (/^\w{3,16}$/.test(S.cfg.offlineName || '') ? `Play starts the game offline as ${S.cfg.offlineName}. Online servers will refuse an offline player.` : 'Enter a player name (3 to 16 letters, digits or underscores) to use offline mode.');
 
+  // Instance libraries: the folders Modion keeps its own instances in.
+  const libs = Array.isArray(S.cfg.libraries) ? S.cfg.libraries : [];
+  const libCall = async (button, method, args, done) => {
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Working...';
+    try {
+      const r = await api(method, args);
+      if (r) { setConfig(r.config || r, { follow: true }); if (done) done(r); }
+    } catch (e) { fail(e, 'Folder not changed'); }
+    button.disabled = false;
+    button.textContent = label;
+    if (S.view === 'settings') render();
+  };
+  const libRow = (l) => {
+    const makeDefault = !l.isDefault && btn('Use for New Instances', () => libCall(makeDefault, 'libraries.setDefault', { path: l.path }), 'small');
+    const relocate = btn('Relocate...', async () => {
+      const yes = !l.count || await confirmScreen('Move this library?',
+        [`Its ${l.count} instance${l.count === 1 ? '' : 's'}, worlds included, will be moved to the folder you choose next. Moving to another disk can take a while.`, l.path], 'Choose Folder');
+      if (yes) libCall(relocate, 'libraries.relocate', { path: l.path }, (r) => toast('Library moved', `${r.moved} instance${r.moved === 1 ? '' : 's'} moved.`));
+      else if (S.view === 'settings') render();
+    }, 'small');
+    const remove = !l.isDefault && btn('Remove', () => libCall(remove, 'libraries.remove', { path: l.path }), 'small');
+    return h('div', { class: 'row' },
+      h('div', { class: 'row-main' },
+        h('div', { class: 'row-title' }, `${l.count} instance${l.count === 1 ? '' : 's'}`,
+          l.isDefault && h('span', { class: 'gold' }, '  new instances go here'),
+          !l.exists && h('span', { class: 'red' }, '  folder not found')),
+        h('div', { class: 'faint path' }, '\u200e' + l.path)),
+      h('div', { class: 'row-actions' }, makeDefault, relocate, remove));
+  };
+  const addLib = btn('Add Folder...', () => libCall(addLib, 'libraries.add'));
+  const newDefault = btn('Change New Instance Folder...', () => libCall(newDefault, 'libraries.setDefault', {}));
+  const rescan = btn('Rescan', () => libCall(rescan, 'libraries.rescan'));
+
   add(v, h('div', { class: 'settings' },
     h('div', { class: 'panel' },
       h('h2', {}, 'Starting the game'),
@@ -948,6 +983,14 @@ function viewSettings(v) {
       h('div', { class: 'bar' }, check('Show the game log when the game is started', S.cfg.openLogOnLaunch !== false,
         (on) => act(api('settings.setOpenLog', { on }), 'Setting not saved'))),
       h('p', { class: 'label' }, 'Starting directly works for vanilla, Fabric and Quilt on Minecraft 1.19 and newer. Other instances always use the launcher that owns them; the line under the Play button says which.')),
+    h('div', { class: 'panel' },
+      h('h2', {}, 'Instance libraries'),
+      h('p', {}, mode === 'prism'
+        ? 'Folders in which Modion keeps instances it starts itself. With the setting above on Prism Launcher, new instances are created in Prism instead.'
+        : 'Folders in which Modion keeps the instances it creates. Every instance in these folders is listed on the Instances page.'),
+      h('div', { class: 'list' }, libs.map(libRow)),
+      h('div', { class: 'bar' }, addLib, newDefault, rescan),
+      h('p', { class: 'label' }, 'If you moved a library yourself, add its new folder here and Modion finds the instances in it again. Removing a folder only takes its instances off the list; nothing is deleted.')),
     h('div', { class: 'panel' },
       h('h2', {}, 'Minecraft account'),
       h('p', {}, 'Sign in with the Microsoft account that owns Minecraft: Java Edition. The sign-in page opens in your web browser; Modion never sees your password.'),
@@ -1136,17 +1179,27 @@ function viewInstances(v) {
     const active = i.id === S.cfg.activeInstanceId;
     const select = btn(active ? 'Selected' : 'Select', () => change(api('instances.setActive', { id: i.id }), 'Could not select'), 'small');
     select.disabled = active;
+    const move = btn('Move...', async () => {
+      move.disabled = true;
+      move.textContent = 'Moving...';
+      try {
+        const r = await api('instances.move', { id: i.id });
+        if (r) { setConfig(r, { follow: true }); toast('Instance moved', `${i.name} is now in its new folder.`); }
+      } catch (e) { fail(e, 'Could not move'); }
+      redraw();
+    }, 'small');
     return h('div', { class: `row ${active ? 'selected' : ''}` },
       h('div', { class: 'slot s48' }, h('img', { class: 'px', alt: '', src: Pixel.icon('logo') })),
       h('div', { class: 'row-main' },
         h('div', { class: 'row-title' }, i.name, h('span', { class: 'gold' }, `  ${instLabel(i)}`),
-          h('span', { class: 'faint' }, `  ${i.managed ? 'made by Modion' : 'added from elsewhere'}`)),
+          h('span', { class: 'faint' }, `  ${i.movable ? 'made by Modion' : i.managed ? 'made by Modion, in Prism Launcher' : 'added from elsewhere'}`)),
         h('div', { class: 'faint path' }, '\u200e' + i.path),
         h('div', { class: 'faint row-title' }, i.launch ? `${i.launch.play ? 'Play' : 'Open'}: ${i.launch.label}` : 'Play is not available for this instance with the current launch setting')),
       h('div', { class: 'row-actions' },
         select,
         btn('Open Folder', () => api('instances.openFolder', { id: i.id }).catch(fail), 'small'),
         i.managed && btn('Rename', () => renameInstance(i), 'small'),
+        i.movable && move,
         i.managed
           ? btn('Delete', async () => {
             const yes = await confirmScreen('Delete this instance?',

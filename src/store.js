@@ -8,7 +8,7 @@ const path = require('path');
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 
 class Store {
-  constructor(dir) {
+  constructor(dir, defaultLibrary) {
     this.dir = dir;
     fs.mkdirSync(dir, { recursive: true });
 
@@ -33,7 +33,12 @@ class Store {
       launchMode: ['prism', 'account', 'offline'].includes(config.launchMode) ? config.launchMode : 'prism',
       openLogOnLaunch: config.openLogOnLaunch !== false, // on unless switched off
       offlineName: typeof config.offlineName === 'string' ? config.offlineName : '',
+      // Folders that hold instances Modion created; new ones go into newInstanceDir.
+      libraries: [...new Set((Array.isArray(config.libraries) ? config.libraries : [])
+        .filter((p) => typeof p === 'string' && path.isAbsolute(p)).map((p) => path.resolve(p)))],
+      newInstanceDir: typeof config.newInstanceDir === 'string' && path.isAbsolute(config.newInstanceDir) ? path.resolve(config.newInstanceDir) : defaultLibrary,
     };
+    if (!this.config.libraries.includes(this.config.newInstanceDir)) this.config.libraries.unshift(this.config.newInstanceDir);
     if (!this.instance(this.config.activeInstanceId)) {
       this.config.activeInstanceId = this.config.instances[0] ? this.config.instances[0].id : null;
     }
