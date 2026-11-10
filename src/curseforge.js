@@ -19,7 +19,7 @@ const setKey = (k) => { apiKey = String(k || '').trim(); };
 const getKey = () => apiKey;
 const hasKey = () => Boolean(apiKey);
 
-async function cf(path, params) {
+async function cf(path, params, body) {
   if (!apiKey) throw new ApiError('CurseForge needs an API key. Add one in Settings.', 'NO_CF_KEY');
   const qs = params
     ? '?' + Object.entries(params)
@@ -29,7 +29,7 @@ async function cf(path, params) {
     : '';
   let reply;
   try {
-    reply = await getJson(`${BASE}${path}${qs}`, { headers: { 'x-api-key': apiKey } });
+    reply = await getJson(`${BASE}${path}${qs}`, { headers: { 'x-api-key': apiKey }, ...(body ? { method: 'POST', body } : {}) });
   } catch (e) {
     if (e.status === 401 || e.status === 403) {
       throw new ApiError(
@@ -162,9 +162,15 @@ async function brief(projectId) {
   return { title: m.name || String(projectId), icon: (m.logo && m.logo.thumbnailUrl) || null };
 }
 
+// Several files by ID in one request (used when importing a modpack).
+async function getFiles(fileIds) {
+  if (!fileIds.length) return [];
+  return arr((await cf('/mods/files', null, { fileIds })).data).map(normFile);
+}
+
 async function testKey() {
   await cf(`/games/${GAME}`);
   return true;
 }
 
-module.exports = { setKey, getKey, hasKey, search, project, versions, getVersion, latest, brief, testKey };
+module.exports = { setKey, getKey, hasKey, search, project, versions, getVersion, getFiles, latest, brief, testKey };

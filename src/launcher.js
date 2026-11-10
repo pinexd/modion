@@ -99,7 +99,7 @@ async function index(uid) {
   return versions;
 }
 
-async function components(gameVersion, loader) {
+async function components(gameVersion, loader, loaderVersion) {
   if (!(await index('net.minecraft')).some((v) => v.version === gameVersion)) {
     throw new ApiError(`Prism Launcher does not offer Minecraft ${gameVersion}.`, 'NO_GAME_VERSION');
   }
@@ -117,7 +117,9 @@ async function components(gameVersion, loader) {
     builds = builds.filter((v) => arr(v.requires).some((r) => r && r.uid === 'net.minecraft' && r.equals === gameVersion));
   }
   // The index is newest first: take the recommended build, else the newest stable, else the newest.
-  const pick = builds.find((v) => v.recommended) || builds.find((v) => !v.type || v.type === 'release') || builds[0];
+  // A modpack names the exact loader build it was made for; use it when Prism knows it.
+  const pick = builds.find((v) => loaderVersion && v.version === loaderVersion)
+    || builds.find((v) => v.recommended) || builds.find((v) => !v.type || v.type === 'release') || builds[0];
   if (!pick) throw missing;
   list.push({ uid: LOADER_UID[loader], version: pick.version });
   return list;
@@ -125,37 +127,85 @@ async function components(gameVersion, loader) {
 
 // Writes a new Prism instance and returns its game folder. Prism downloads the game,
 // loader and Java the first time the instance is started.
-async function create({ name, gameVersion, loader }) {
-  const prism = prismInstalls()[0];
-  if (!prism) throw new ApiError('Creating instances needs Prism Launcher, which was not found on this computer.', 'NO_PRISM');
-  if (!gameVersion) throw new ApiError('Pick a game version for the new instance.', 'BAD_REQUEST');
-  if (loader && !Object.hasOwn(LOADER_UID, loader)) throw new ApiError('Unknown mod loader.', 'BAD_REQUEST');
-
-  // Prism reads the name from an INI file and uses the folder name as the instance ID.
-  const clean = String(name || '').replace(/[^\p{L}\p{N} ._()+-]/gu, '').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 60)
+// Instance names end up as folder names and in an INI file, so they are kept simple.
+function cleanName(name, gameVersion, loader) {
+  return String(name || '').replace(/[^\p{L}\p{N} ._()+-]/gu, '').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 60)
     || `${loader ? LOADER_NAME[loader] : 'Minecraft'} ${gameVersion}`;
-  const parts = await components(gameVersion, loader);
+}
 
-  const instances = path.join(prism.root, 'instances');
-  let dir = null;
-  for (let n = 1; n < 100 && !dir; n++) {
+// A new, empty folder named after the instance (with " (2)" and so on if taken).
+function freshFolder(instances, clean) {
+  try { fs.mkdirSync(instances, { recursive: true }); } catch (e) {
+    throw new ApiError(`Could not create the instances folder: ${e.code || e.message}.`, 'FS');
+  }
+  for (let n = 1; n < 100; n++) {
     const candidate = path.join(instances, n === 1 ? clean : `${clean} (${n})`);
-    try { fs.mkdirSync(candidate); dir = candidate; } catch (e) {
+    try { fs.mkdirSync(candidate); return candidate; } catch (e) {
       if (e.code !== 'EEXIST') throw new ApiError(`Could not create the instance folder: ${e.code || e.message}.`, 'FS');
     }
   }
-  if (!dir) throw new ApiError('Too many instances share that name.', 'EXISTS');
+  throw new ApiError('Too many instances share that name.', 'EXISTS');
+}
+
+function check({ gameVersion, loader }) {
+  if (!gameVersion) throw new ApiError('Pick a game version for the new instance.', 'BAD_REQUEST');
+  if (loader && !Object.hasOwn(LOADER_UID, loader)) throw new ApiError('Unknown mod loader.', 'BAD_REQUEST');
+}
+
+// An instance in Modion's own folder, for when Modion starts the game itself.
+function createOwn({ name, gameVersion, loader }, root) {
+  check({ gameVersion, loader });
+  const clean = cleanName(name, gameVersion, loader);
+  const dir = freshFolder(path.join(root, 'instances'), clean);
   try {
     const game = path.join(dir, 'minecraft');
     fs.mkdirSync(game);
-    fs.writeFileSync(path.join(dir, 'mmc-pack.json'), JSON.stringify({ components: parts, formatVersion: 1 }, null, 4));
-    // Written last: this file is what makes Prism see the folder as an instance.
-    fs.writeFileSync(path.join(dir, 'instance.cfg'), `[General]\nConfigVersion=1.3\nInstanceType=OneSix\niconKey=default\nname=${clean}\n`);
-    return { path: game, name: clean };
+    fs.writeFileSync(path.join(dir, 'instance.json'), JSON.stringify({ name: clean, gameVersion, loader: loader || '' }, null, 2));
+    return { path: game, name: clean, home: dir };
   } catch (e) {
     fs.rmSync(dir, { recursive: true, force: true }); // only ever the folder created just above
     throw new ApiError(`Could not write the new instance: ${e.code || e.message}.`, 'FS');
   }
 }
 
-module.exports = { canCreate, describe, launch, create };
+// Keeps the launcher's own record of the name in step with Modion's.
+function rename(home, name) {
+  const cfg = path.join(home, 'instance.cfg'), own = path.join(home, 'instance.json');
+  try {
+    if (fs.existsSync(cfg)) {
+      const text = fs.readFileSync(cfg, 'utf8');
+      fs.writeFileSync(cfg, /^name=.*$/m.test(text) ? text.replace(/^name=.*$/m, () => `name=${name}`) : `${text.replace(/\n*$/, '\n')}name=${name}\n`);
+    } else if (fs.existsSync(own)) {
+      fs.writeFileSync(own, JSON.stringify({ ...JSON.parse(fs.readFileSync(own, 'utf8')), name }, null, 2));
+    }
+  } catch (e) {
+    throw new ApiError(`Could not rename the instance: ${e.code || e.message}.`, 'FS');
+  }
+}
+
+// The folders in which Modion-made instances live; only direct children of these may be deleted.
+const managedRoots = (ownRoot) => [path.join(ownRoot, 'instances'), ...prismInstalls().map((p) => path.join(p.root, 'instances'))];
+
+async function create({ name, gameVersion, loader, loaderVersion }) {
+  const prism = prismInstalls()[0];
+  if (!prism) throw new ApiError('Creating this instance needs Prism Launcher, which was not found on this computer.', 'NO_PRISM');
+  check({ gameVersion, loader });
+
+  // Prism reads the name from an INI file and uses the folder name as the instance ID.
+  const clean = cleanName(name, gameVersion, loader);
+  const parts = await components(gameVersion, loader, loaderVersion);
+  const dir = freshFolder(path.join(prism.root, 'instances'), clean);
+  try {
+    const game = path.join(dir, 'minecraft');
+    fs.mkdirSync(game);
+    fs.writeFileSync(path.join(dir, 'mmc-pack.json'), JSON.stringify({ components: parts, formatVersion: 1 }, null, 4));
+    // Written last: this file is what makes Prism see the folder as an instance.
+    fs.writeFileSync(path.join(dir, 'instance.cfg'), `[General]\nConfigVersion=1.3\nInstanceType=OneSix\niconKey=default\nname=${clean}\n`);
+    return { path: game, name: clean, home: dir };
+  } catch (e) {
+    fs.rmSync(dir, { recursive: true, force: true }); // only ever the folder created just above
+    throw new ApiError(`Could not write the new instance: ${e.code || e.message}.`, 'FS');
+  }
+}
+
+module.exports = { canCreate, describe, launch, create, createOwn, rename, cleanName, managedRoots };

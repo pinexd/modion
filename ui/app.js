@@ -280,6 +280,7 @@ function renderRail() {
     h('div', { class: 'brand' },
       h('img', { class: 'px', alt: '', src: Pixel.icon('logo') }),
       h('div', {}, h('div', { class: 'brand-name' }, 'Modion'), h('div', { class: 'faint small' }, 'Mod manager'))),
+    item(S.view === 'instances', 'logo', 'Instances', () => go('instances')),
     h('div', { class: 'nav-label' }, 'Browse'),
     ...Object.entries(SOURCES).map(([id, name]) =>
       item(P ? P.from === 'browse' && P.hit.source === id : S.view === 'browse' && S.browse.source === id, id, name, () => {
@@ -310,6 +311,9 @@ function renderTop() {
     back = h('button', { class: 'back', title: 'Back', onclick: () => go(P.from || 'browse') }, '\u2190');
     tabs = [['description', 'Description'], ['gallery', P.detail && Array.isArray(P.detail.gallery) ? `Gallery (${P.detail.gallery.length})` : 'Gallery'], ['versions', 'Files']]
       .map(([id, label]) => tab(label, P.tab === id, () => { P.tab = id; render(); }));
+  } else if (S.view === 'instances') {
+    title = 'Instances';
+    tabs = [tab('All', true, () => {})];
   } else {
     title = 'Settings';
     tabs = [tab('General', true, () => {})];
@@ -359,7 +363,7 @@ function render() {
   renderBottom();
   const v = $('#view');
   v.replaceChildren();
-  ({ browse: viewBrowse, project: viewProject, library: viewLibrary, settings: viewSettings })[S.view](v);
+  ({ browse: viewBrowse, project: viewProject, library: viewLibrary, settings: viewSettings, instances: viewInstances })[S.view](v);
 }
 
 /* ---------- browse ---------- */
@@ -815,7 +819,7 @@ function viewSettings(v) {
 
 /* ---------- instances ---------- */
 
-function openInstances({ autoDetect } = {}) {
+function openInstances({ autoDetect, start } = {}) {
   const body = h('div', { class: 'screen-body' });
   let detected = null;
 
@@ -899,18 +903,18 @@ function openInstances({ autoDetect } = {}) {
   };
   const newInstance = () => {
     form({ name: '', gameVersion: (activeInst() || {}).gameVersion || S.gameVersions[0] || '', loader: 'fabric' },
-      (vals) => (vals.gameVersion ? apply(api('instances.create', vals)) : fail(new Error('Pick a game version for the new instance.'))),
+      async (vals) => {
+        if (!vals.gameVersion) { fail(new Error('Pick a game version for the new instance.')); return; }
+        await apply(api('instances.create', vals));
+        if (start === 'new' && !editing) closeScreen(); // opened just to create one: done
+      },
       {
         saveLabel: 'Create',
         vanilla: 'Vanilla (no mods)',
-        note: 'The instance is created in Prism Launcher, which downloads the game the first time you press Play. Leave the name empty to name it after the version.',
+        note: 'The game is downloaded the first time you press Play. Leave the name empty to name the instance after its version.',
       });
   };
   const create = btn('New Instance...', newInstance);
-  if (!S.cfg.canCreate) {
-    create.disabled = true;
-    create.title = 'Creating instances needs Prism Launcher, which was not found on this computer.';
-  }
   const addFolder = async () => {
     let dir;
     try { dir = await api('instances.pickFolder'); } catch (e) { return fail(e); }
@@ -923,6 +927,81 @@ function openInstances({ autoDetect } = {}) {
     render);
   draw();
   if (autoDetect) detect();
+  if (start === 'new') newInstance();
+}
+
+/* ---------- instances page ---------- */
+
+function renameInstance(i) {
+  const input = h('input', { class: 'field', value: i.name, maxLength: 60 });
+  const save = async () => {
+    try {
+      setConfig(await api('instances.rename', { id: i.id, name: input.value }));
+      closeScreen();
+    } catch (e) { fail(e, 'Could not rename'); }
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  showScreen('Rename Instance', h('div', { class: 'screen-body' }, h('div', { class: 'form' }, h('div', {}, 'Name'), input)),
+    [btn('Cancel', closeScreen), btn('Rename', save, 'green')], render);
+  input.focus();
+  input.select();
+}
+
+function viewInstances(v) {
+  const redraw = () => { if (S.view === 'instances') render(); };
+  const change = async (call, title) => {
+    try { setConfig(await call, { follow: true }); } catch (e) { fail(e, title); }
+    redraw();
+  };
+  const importPack = btn('Import Modpack...', async () => {
+    importPack.disabled = true;
+    importPack.textContent = 'Importing...';
+    try {
+      const r = await api('instances.import');
+      if (r) {
+        setConfig(r.config, { follow: true });
+        toast('Modpack imported', `${r.name}: ${r.files} file${r.files === 1 ? '' : 's'} downloaded.`);
+        const left = Array.isArray(r.skipped) ? r.skipped : [];
+        for (const sk of left.slice(0, 4)) toast('Left out of the pack', `${sk.title}: ${sk.reason}`, { tone: 'gold', time: 12000 });
+        if (left.length > 4) toast('Left out of the pack', `...and ${left.length - 4} more files.`, { tone: 'gold', time: 12000 });
+      }
+    } catch (e) { fail(e, 'Import failed'); }
+    redraw();
+  });
+
+  const row = (i) => {
+    const active = i.id === S.cfg.activeInstanceId;
+    const select = btn(active ? 'Selected' : 'Select', () => change(api('instances.setActive', { id: i.id }), 'Could not select'), 'small');
+    select.disabled = active;
+    return h('div', { class: `row ${active ? 'selected' : ''}` },
+      h('div', { class: 'slot s48' }, h('img', { class: 'px', alt: '', src: Pixel.icon('logo') })),
+      h('div', { class: 'row-main' },
+        h('div', { class: 'row-title' }, i.name, h('span', { class: 'gold' }, `  ${instLabel(i)}`),
+          h('span', { class: 'faint' }, `  ${i.managed ? 'made by Modion' : 'added from elsewhere'}`)),
+        h('div', { class: 'faint path' }, '\u200e' + i.path),
+        h('div', { class: 'faint row-title' }, i.launch ? `${i.launch.play ? 'Play' : 'Open'}: ${i.launch.label}` : 'Play is not available for this instance with the current launch setting')),
+      h('div', { class: 'row-actions' },
+        select,
+        btn('Open Folder', () => api('instances.openFolder', { id: i.id }).catch(fail), 'small'),
+        i.managed && btn('Rename', () => renameInstance(i), 'small'),
+        i.managed
+          ? btn('Delete', async () => {
+            const yes = await confirmScreen('Delete this instance?',
+              [`"${i.name}" and everything in it, including its worlds, will be moved to the trash.`, i.home], 'Delete');
+            if (yes) change(api('instances.delete', { id: i.id }), 'Could not delete');
+          }, 'small')
+          : btn('Forget', () => change(api('instances.remove', { id: i.id }), 'Could not remove'), 'small')));
+  };
+
+  v.append(
+    h('div', { class: 'bar' },
+      btn('New Instance...', () => openInstances({ start: 'new' }), 'green'),
+      importPack,
+      btn('Add Existing...', () => openInstances({ autoDetect: true })),
+      h('span', { class: 'push dim' }, `${S.cfg.instances.length} instance${S.cfg.instances.length === 1 ? '' : 's'}`)),
+    h('div', { class: 'list' }, S.cfg.instances.length ? S.cfg.instances.map(row) : message(
+      h('p', {}, 'No instances yet'),
+      h('p', { class: 'dim' }, 'Create a new instance, import a modpack (.mrpack or a CurseForge zip), or add a game folder you already have.'))));
 }
 
 /* ---------- start ---------- */

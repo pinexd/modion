@@ -18,8 +18,11 @@ fs.mkdirSync(out, { recursive: true });
 
 electron.app.setPath('userData', path.join(work, 'profile'));
 // Pick the "mods" folder itself, as people do; the app should step up to the game folder.
-electron.dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [mods] });
-electron.shell.trashItem = (p) => fs.promises.rm(p);
+let nextPick = mods;
+electron.dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [nextPick] });
+electron.shell.trashItem = (p) => fs.promises.rm(p, { recursive: true });
+// Modion's own data (instances it creates, game files) goes to the throwaway folder too.
+process.env.XDG_DATA_HOME = path.join(work, 'data');
 // A pretend Prism Launcher: new instances are written here, and "launching" only records the command.
 process.env.MODION_PRISM_ROOT = path.join(work, 'prism');
 fs.mkdirSync(path.join(work, 'prism', 'instances'), { recursive: true });
@@ -313,6 +316,81 @@ require('../main.js').ready.then(async (win) => {
     }
     expect(await set({ mode: 'nonsense' }) === 'OK' && await js(`api('config.get').then((c) => c.launchMode)`) === 'prism', 'an unknown mode did not fall back to Prism');
     await js(`api('config.get').then((c) => { setConfig(c); go('browse'); })`);
+  });
+
+  await step('instances page: import a modpack, rename, delete; hostile packs are refused', async () => {
+    // Build two .mrpack files: a real one (one mod + a config file) and one that tries to escape the instance folder.
+    const real = (await require('../src/modrinth').versions('modmenu', { type: 'mod', gameVersion: '1.21.1', loader: 'fabric' }))[0];
+    const index = (files) => JSON.stringify({ formatVersion: 1, game: 'minecraft', versionId: '1', name: 'Smoke Pack', dependencies: { minecraft: '1.21.1', 'fabric-loader': '0.16.0' }, files });
+    const good = [{ path: `mods/${real.file.filename}`, hashes: { sha1: real.file.sha1, sha512: real.file.sha512 }, downloads: [real.file.url], fileSize: real.file.size },
+      { path: 'mods/server-only.jar', env: { client: 'unsupported' }, hashes: {}, downloads: ['https://cdn.modrinth.com/nope'], fileSize: 1 },
+      { path: 'mods/elsewhere.jar', hashes: {}, downloads: ['https://evil.example/x.jar'], fileSize: 1 }];
+    const make = (file, entries) => require('child_process').execFileSync('python3', ['-c',
+      'import sys,json,zipfile\nz=zipfile.ZipFile(sys.argv[1],"w",zipfile.ZIP_DEFLATED)\nfor n,d in json.loads(sys.argv[2]): z.writestr(n,d)\nz.close()', file, JSON.stringify(entries)]);
+    const goodPack = path.join(work, 'good.mrpack'), slipPack = path.join(work, 'slip.mrpack'), pathPack = path.join(work, 'path.mrpack');
+    make(goodPack, [['modrinth.index.json', index(good)], ['overrides/config/smoke.txt', 'hello'], ['overrides/options.txt', 'x']]);
+    make(slipPack, [['modrinth.index.json', index([])], ['overrides/../../escaped.txt', 'bad']]);
+    make(pathPack, [['modrinth.index.json', index([{ ...good[0], path: '../../escaped.jar' }])]]);
+    const prismInstances = path.join(work, 'prism', 'instances');
+    const before = fs.readdirSync(prismInstances).length;
+
+    await js(`go('instances')`);
+    expect(await js(`document.querySelector('.nav-item').textContent`) === 'Instances', 'Instances is not the first sidebar entry');
+    for (const evil of [slipPack, pathPack]) {
+      nextPick = evil;
+      const r = await js(`window.modion.call('instances.import')`);
+      expect(!r.ok && r.code === 'BAD_PACK', `a pack escaping its folder was accepted: ${JSON.stringify(r).slice(0, 160)}`);
+    }
+    expect(fs.readdirSync(prismInstances).length === before && !fs.existsSync(path.join(work, 'escaped.txt')) && !fs.existsSync(path.join(prismInstances, 'escaped.jar')), 'a refused pack left files behind');
+    nextPick = path.join(work, 'missing.mrpack');
+    fs.writeFileSync(nextPick, 'not a zip at all');
+    expect((await js(`window.modion.call('instances.import')`)).code === 'BAD_PACK', 'a non-zip was accepted');
+
+    nextPick = goodPack;
+    const count = await js(`S.cfg.instances.length`);
+    await js(`[...document.querySelectorAll('#view .btn')].find(b => b.textContent === 'Import Modpack...').click()`);
+    await waitFor(`S.cfg.instances.length === ${count + 1} && S.view === 'instances' && [...document.querySelectorAll('#view .btn')].some(b => b.textContent === 'Import Modpack...')`, 'import to finish', 120000);
+    const home = path.join(prismInstances, 'Smoke Pack'), gameDir = path.join(home, 'minecraft');
+    expect(fs.existsSync(path.join(gameDir, 'mods', real.file.filename)), 'the pack\'s mod was not downloaded');
+    expect(fs.readFileSync(path.join(gameDir, 'config', 'smoke.txt'), 'utf8') === 'hello', 'overrides were not copied');
+    expect(fs.readdirSync(path.join(gameDir, 'mods')).length === 1, `server-only or off-site files were fetched: ${fs.readdirSync(path.join(gameDir, 'mods'))}`);
+    expect(await js(`activeInst().managed === true && activeInst().name === 'Smoke Pack'`), 'imported instance is not selected and managed');
+    await shot('15-instances');
+
+    await js(`[...document.querySelectorAll('#view .row.selected .btn')].find(b => b.textContent === 'Rename').click()`);
+    await waitFor(`document.querySelector('#overlay .form input')`, 'rename dialog');
+    await js(`document.querySelector('#overlay .form input').value = 'Renamed; Pack'`);
+    await js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === 'Rename').click()`);
+    await waitFor(`document.querySelector('#overlay').hidden && activeInst().name === 'Renamed Pack'`, 'rename');
+    expect(fs.readFileSync(path.join(home, 'instance.cfg'), 'utf8').includes('name=Renamed Pack\n'), 'Prism\'s copy of the name was not updated');
+
+    // Instances Modion did not make can be forgotten but never renamed or deleted.
+    const foreign = await js(`S.cfg.instances[0].id`);
+    expect((await js(`window.modion.call('instances.delete', { id: '${foreign}' })`)).code === 'NOT_MANAGED' && fs.existsSync(mods), 'a foreign instance could be deleted');
+    expect((await js(`window.modion.call('instances.rename', { id: '${foreign}', name: 'x' })`)).code === 'NOT_MANAGED', 'a foreign instance could be renamed');
+
+    await js(`[...document.querySelectorAll('#view .row.selected .btn')].find(b => b.textContent === 'Delete').click()`);
+    await waitFor(`!document.querySelector('#overlay').hidden`, 'delete confirmation');
+    await shot('16-delete-confirm');
+    await js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === 'Delete').click()`);
+    await waitFor(`S.cfg.instances.length === ${count}`, 'delete');
+    expect(!fs.existsSync(home), 'the instance folder is still there');
+
+    // With a setting where Modion starts the game itself, new instances live in Modion's own folder.
+    if (await js(`S.cfg.offlineAllowed`)) {
+      await js(`window.modion.call('settings.setLaunch', { mode: 'offline', offlineName: 'Tester_1' })`);
+      const made = await js(`window.modion.call('instances.create', { name: 'Own One', gameVersion: '1.21.1', loader: 'fabric' })`);
+      const own = path.join(work, 'data', 'modion', 'instances', 'Own One');
+      expect(made.ok && fs.existsSync(path.join(own, 'minecraft')), `own instance not created: ${JSON.stringify(made).slice(0, 200)}`);
+      const inst = made.data.instances[made.data.instances.length - 1];
+      expect(inst.launch && inst.launch.label === 'Modion, offline as Tester_1', `own instance launch: ${JSON.stringify(inst.launch)}`);
+      const forge = await js(`window.modion.call('instances.create', { name: 'Forge One', gameVersion: '1.20.1', loader: 'forge' })`);
+      expect(forge.ok && fs.existsSync(path.join(prismInstances, 'Forge One')), 'a Forge instance did not go to Prism');
+      for (const i of [inst, forge.data.instances[forge.data.instances.length - 1]]) await js(`window.modion.call('instances.delete', { id: '${i.id}' })`);
+      expect(!fs.existsSync(own) && !fs.existsSync(path.join(prismInstances, 'Forge One')), 'deleted instances left folders');
+      await js(`window.modion.call('settings.setLaunch', { mode: 'prism' })`);
+    }
+    await js(`api('instances.setActive', { id: '${foreign}' }).then((c) => { setConfig(c); go('browse'); })`);
   });
 
   await step('curseforge without a key explains itself', async () => {

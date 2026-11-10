@@ -30,6 +30,10 @@ Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step
   NeoForge), and the Play button in the bottom bar asks Prism to launch it, with the account
   and Java that Prism already manages. Instances owned by other launchers get an
   "Open Launcher" button instead.
+- **Instances page** – create an instance, import a modpack (Modrinth `.mrpack` or a
+  CurseForge zip; the latter needs your CurseForge API key), and rename, delete or open the
+  folder of instances Modion made. Instances added from other launchers can be selected and
+  forgotten, never renamed or deleted.
 - **Direct launching (in progress)** – Modion can also start the game itself (vanilla, Fabric
   and Quilt on 1.19+), downloading the game, assets and Java from Mojang into
   `~/.local/share/modion`. In normal use this needs a Microsoft sign-in (Settings), which
@@ -61,6 +65,7 @@ third-party downloads for their project; those files get a "Website Only" button
 | `src/launcher.js` | Creating Prism instances and starting the game through Prism |
 | `src/game.js` | Downloading and starting the game directly |
 | `src/account.js` | Microsoft sign-in |
+| `src/modpack.js` | Reading `.mrpack` and CurseForge modpack zips |
 | `ui/` | The interface; `markdown.js` renders and sanitises project descriptions |
 | `dev/smoke.js` | End-to-end check: `MODION_HEADLESS=1 electron dev/smoke.js out-dir` |
 

@@ -24,6 +24,8 @@ class Store {
           name: String(i.name || path.basename(i.path)),
           gameVersion: typeof i.gameVersion === 'string' ? i.gameVersion : '',
           loader: typeof i.loader === 'string' ? i.loader : '',
+          // Set on instances Modion created or imported: `home` is the folder it may rename and delete.
+          ...(i.managed === true && typeof i.home === 'string' && i.home ? { managed: true, home: i.home } : {}),
         })),
       activeInstanceId: typeof config.activeInstanceId === 'string' ? config.activeInstanceId : null,
       curseforgeKey: typeof config.curseforgeKey === 'string' ? config.curseforgeKey : '',

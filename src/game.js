@@ -298,4 +298,4 @@ function offlineSession(name) {
   return { name, uuid: h.toString('hex'), token: '0', offline: true };
 }
 
-module.exports = { supports, launch, offlineSession, ROOT };
+module.exports = { supports, launch, offlineSession, fetchAll, versionJson, ROOT };

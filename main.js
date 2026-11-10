@@ -14,6 +14,7 @@ const content = require('./src/content');
 const launcher = require('./src/launcher');
 const { Account, GUID } = require('./src/account');
 const game = require('./src/game');
+const modpack = require('./src/modpack');
 
 const INDEX = path.join(__dirname, 'ui', 'index.html');
 const sources = { modrinth, curseforge };
@@ -117,6 +118,45 @@ function cleanInstance(input, base) {
     gameVersion: text(input.gameVersion, 32),
     loader: oneOf(input.loader, LOADERS, ''),
   };
+}
+
+// Makes the folders for a new instance. It goes into Prism Launcher when Prism is what will
+// start it (the Prism setting, or a loader Modion cannot start itself), otherwise into
+// Modion's own instances folder.
+async function makeInstance(spec) {
+  const direct = game.supports(spec);
+  if (launcher.canCreate() && (store.config.launchMode === 'prism' || !direct)) return launcher.create(spec);
+  if (!direct) throw new ApiError('Forge, NeoForge and versions before 1.19 need Prism Launcher, which was not found on this computer.', 'NO_PRISM');
+  await game.versionJson(spec.gameVersion); // fails for a version Mojang does not have
+  return launcher.createOwn(spec, game.ROOT);
+}
+
+function adopt(made, spec) {
+  offered.add(made.path);
+  const inst = { id: crypto.randomUUID(), path: made.path, name: made.name, gameVersion: spec.gameVersion, loader: spec.loader, managed: true, home: made.home };
+  store.config.instances.push(inst);
+  store.config.activeInstanceId = inst.id;
+  store.saveConfig();
+  return inst;
+}
+
+// An instance Modion made, whose folder is still exactly where Modion puts instances.
+function managed(idValue) {
+  const inst = store.instance(idValue);
+  if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+  const ok = inst.managed && inst.home
+    && launcher.managedRoots(game.ROOT).includes(path.dirname(inst.home))
+    && inst.path.startsWith(inst.home + path.sep);
+  if (!ok) throw new ApiError('Modion only renames and deletes instances it created.', 'NOT_MANAGED');
+  return inst;
+}
+
+function forget(idValue) {
+  store.config.instances = store.config.instances.filter((i) => i.id !== idValue);
+  delete store.manifest[idValue];
+  if (!store.active()) store.config.activeInstanceId = store.config.instances[0] ? store.config.instances[0].id : null;
+  store.saveConfig();
+  store.saveManifest();
 }
 
 // People often pick the "mods" folder itself; the instance is the folder around it.
@@ -240,13 +280,71 @@ const methods = {
 
   // Makes a new Prism Launcher instance and selects it.
   'instances.create': async (a) => {
-    const made = await launcher.create({ name: text(a.name, 80), gameVersion: text(a.gameVersion, 32), loader: oneOf(a.loader, LOADERS, '') });
-    offered.add(made.path);
-    const inst = { id: crypto.randomUUID(), path: made.path, name: made.name, gameVersion: text(a.gameVersion, 32), loader: oneOf(a.loader, LOADERS, '') };
-    store.config.instances.push(inst);
-    store.config.activeInstanceId = inst.id;
+    const spec = { name: text(a.name, 80), gameVersion: text(a.gameVersion, 32), loader: oneOf(a.loader, LOADERS, '') };
+    adopt(await makeInstance(spec), spec);
+    return publicConfig();
+  },
+
+  // Creates an instance from a Modrinth .mrpack or a CurseForge modpack zip.
+  'instances.import': async () => {
+    const pick = await dialog.showOpenDialog(liveWindow(), {
+      title: 'Import a modpack',
+      filters: [{ name: 'Modpacks (.mrpack, .zip)', extensions: ['mrpack', 'zip'] }],
+      properties: ['openFile'],
+    });
+    if (pick.canceled || !pick.filePaths[0]) return null;
+    const pack = modpack.inspect(pick.filePaths[0]);
+    let made = null;
+    const job = { id: crypto.randomUUID(), title: pack.name, filename: pack.name, saved: true };
+    try {
+      const spec = { name: text(pack.name, 80), gameVersion: text(pack.gameVersion, 32), loader: oneOf(pack.loader, LOADERS, ''), loaderVersion: text(pack.loaderVersion, 40) };
+      // Checked before any folder is made, so a pack that cannot be fetched leaves nothing behind.
+      if (pack.kind === 'curseforge' && pack.files.length && !curseforge.hasKey()) {
+        throw new ApiError('Importing a CurseForge modpack needs your CurseForge API key. Add it in Settings first.', 'NO_CF_KEY');
+      }
+      made = await makeInstance(spec);
+      const { items, skipped } = await modpack.downloads(pack, made.path, curseforge);
+      await game.fetchAll(items, (received, total) => emit({ ...job, state: 'progress', received, total }));
+      const copied = await modpack.unpackOverrides(pack, made.path);
+      const inst = adopt(made, spec);
+      return { config: publicConfig(), name: inst.name, files: items.length, copied, skipped };
+    } catch (e) {
+      if (made) fs.rmSync(made.home, { recursive: true, force: true }); // only the folder created just above
+      throw e;
+    } finally {
+      pack.zip.close();
+      emit({ ...job, state: 'done' });
+    }
+  },
+
+  'instances.rename': (a) => {
+    const inst = managed(a.id);
+    const name = launcher.cleanName(text(a.name, 80), inst.gameVersion, inst.loader);
+    launcher.rename(inst.home, name);
+    inst.name = name;
     store.saveConfig();
     return publicConfig();
+  },
+
+  // Moves the whole instance (worlds included) to the trash.
+  'instances.delete': async (a) => {
+    const inst = managed(a.id);
+    if (instances.isDir(inst.home)) {
+      try { await shell.trashItem(inst.home); } catch {
+        throw new ApiError(`"${inst.name}" could not be moved to the trash. Nothing was deleted.`, 'TRASH');
+      }
+    }
+    forget(inst.id);
+    return publicConfig();
+  },
+
+  'instances.openFolder': async (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    if (!instances.isDir(inst.path)) throw new ApiError(`The folder for "${inst.name}" no longer exists: ${inst.path}`, 'NO_FOLDER');
+    const problem = await shell.openPath(inst.path);
+    if (problem) throw new ApiError(`Could not open the folder: ${problem}`, 'OPEN');
+    return true;
   },
 
   'instances.launch': async (a) => {
@@ -272,13 +370,7 @@ const methods = {
 
   // Forgets the instance in Modion only; nothing on disk is touched.
   'instances.remove': (a) => {
-    store.config.instances = store.config.instances.filter((i) => i.id !== a.id);
-    delete store.manifest[a.id];
-    if (!store.active()) {
-      store.config.activeInstanceId = store.config.instances[0] ? store.config.instances[0].id : null;
-    }
-    store.saveConfig();
-    store.saveManifest();
+    forget(a.id);
     return publicConfig();
   },
 
