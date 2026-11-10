@@ -52,7 +52,9 @@ Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step
 
 CurseForge only serves apps that send an API key. Get a free one at
 <https://console.curseforge.com/> and paste it under Settings. Authors can switch off
-third-party downloads for their project; those files get a "Website Only" button.
+third-party downloads for their project. For those files Modion opens the file's page on
+curseforge.com in a separate window; you press Download there, and Modion puts the file in
+the instance. With a key set, mods installed from one site also show as installed on the other.
 
 ## Layout
 
@@ -65,6 +67,7 @@ third-party downloads for their project; those files get a "Website Only" button
 | `src/launcher.js` | Creating Prism instances and starting the game through Prism |
 | `src/game.js` | Downloading and starting the game directly |
 | `src/account.js` | Microsoft sign-in |
+| `src/webinstall.js` | The CurseForge page window that catches a manual download |
 | `src/modpack.js` | Reading `.mrpack` and CurseForge modpack zips |
 | `ui/` | The interface; `markdown.js` renders and sanitises project descriptions |
 | `dev/smoke.js` | End-to-end check: `MODION_HEADLESS=1 electron dev/smoke.js out-dir` |

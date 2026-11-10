@@ -15,6 +15,7 @@ const launcher = require('./src/launcher');
 const { Account, GUID } = require('./src/account');
 const game = require('./src/game');
 const modpack = require('./src/modpack');
+const webinstall = require('./src/webinstall');
 
 const INDEX = path.join(__dirname, 'ui', 'index.html');
 const sources = { modrinth, curseforge };
@@ -33,6 +34,16 @@ const emit = (data) => {
 };
 const ctx = () => ({ store, sources, trash: (p) => shell.trashItem(p) });
 const liveWindow = () => (win && !win.isDestroyed() ? win : undefined);
+
+// Looks through the active instance's mods in the background (naming unrecorded files and
+// linking them across the two sites), then tells the page what counts as installed.
+function refreshInstalled() {
+  if (!store || !store.active()) return;
+  content.list(ctx(), 'mod').catch(() => {}).then(() => {
+    const w = liveWindow();
+    if (w && !w.webContents.isDestroyed()) w.webContents.send('installed', content.installedIds(store));
+  });
+}
 
 /* ---------- everything the page sends is checked here before it is used ---------- */
 
@@ -210,11 +221,45 @@ const methods = {
   'account.signOut': () => { account.signOut(); return publicConfig(); },
 
   'meta.gameVersions': () => modrinth.gameVersions(),
+  'meta.categories': (a) => source(a.source).categories(oneOf(a.type, TYPES, 'mod')),
+
+  // For a file its author only offers on the website: show that page and wait for the
+  // person to download the file there.
+  'install.viaWebsite': async (a) => {
+    const inst = content.activeInstance(store);
+    const type = contentType(a.type);
+    const projectId = id(a.projectId, 'project');
+    const v = await curseforge.getVersion(projectId, id(a.versionId, 'file'));
+    if (!v.expected) throw new ApiError('CurseForge did not say which file this is.', 'BAD_REPLY');
+    const page = (await curseforge.brief(projectId)).url;
+    if (!page) throw new ApiError('CurseForge did not give a page for this project.', 'BAD_REPLY');
+    const job = { id: crypto.randomUUID(), title: text(a.title, 200) || v.name, filename: v.expected.filename };
+    try {
+      const got = await webinstall.open({
+        parent: liveWindow(),
+        url: `${page.replace(/\/+$/, '')}/files/${encodeURIComponent(v.id)}`,
+        title: `Download ${v.expected.filename} from CurseForge`,
+        siteHosts: ['curseforge.com'],
+        downloadHosts: ['forgecdn.net', 'curseforge.com'],
+        expect: v.expected,
+        destDir: path.join(inst.path, content.FOLDER[type]),
+        onProgress: (received, total) => emit({ ...job, state: 'progress', received, total }),
+      });
+      await content.adoptFile(ctx(), inst, { source: 'curseforge', projectId, type, title: text(a.title, 200), icon: text(a.icon, 2000) || null }, got.tmp, v);
+      emit({ ...job, state: 'done', icon: text(a.icon, 2000) || null });
+    } catch (e) {
+      emit({ ...job, state: 'error', error: e.message });
+      throw e;
+    }
+    refreshInstalled();
+    return { installed_ids: content.installedIds(store) };
+  },
 
   search: (a) => source(a.source).search({
     ...filter(a),
     query: text(a.query, 200),
     sort: oneOf(a.sort, SORTS, 'relevance'),
+    category: text(a.category, 60),
     page: Math.min(Math.max(Math.floor(Number(a.page)) || 0, 0), 100000),
   }),
   project: (a) => source(a.source).project(id(a.id, 'project')),
@@ -232,6 +277,7 @@ const methods = {
       title: text(a.title, 200),
       icon: text(a.icon, 2000) || null,
     }, emit);
+    refreshInstalled();
     return { ...result, installed_ids: content.installedIds(store) };
   },
 
@@ -378,6 +424,7 @@ const methods = {
     if (!store.instance(a.id)) throw new ApiError('That instance is no longer in the list.', 'GONE');
     store.config.activeInstanceId = a.id;
     store.saveConfig();
+    refreshInstalled();
     return publicConfig();
   },
 
@@ -427,6 +474,7 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.on('closed', () => { win = null; });
+  win.webContents.once('did-finish-load', refreshInstalled);
   win.loadFile(INDEX);
   return win;
 }
@@ -485,7 +533,7 @@ const ready = !first ? Promise.resolve(null) : app.whenReady().then(() => {
       return { ok: true, data: await methods[method](input) };
     } catch (e) {
       if (!(e instanceof ApiError)) console.error(`[${method}]`, e);
-      return { ok: false, error: (e && e.message) || String(e), code: (e && e.code) || 'ERROR' };
+      return { ok: false, error: (e && e.message) || String(e), code: (e && e.code) || 'ERROR', detail: e instanceof ApiError ? e.detail : undefined };
     }
   });
 
@@ -497,7 +545,7 @@ const ready = !first ? Promise.resolve(null) : app.whenReady().then(() => {
   return null;
 });
 
-app.on('will-quit', () => { content.discardPartials(); if (account) account.cancel(); });
+app.on('will-quit', () => { content.discardPartials(); webinstall.cancel(); if (account) account.cancel(); });
 app.on('window-all-closed', () => app.quit());
 
 module.exports = { ready };

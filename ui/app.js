@@ -26,7 +26,7 @@ async function api(method, args) {
   } catch {
     throw Object.assign(new Error('The app\'s background process did not answer.'), { code: 'IPC' });
   }
-  if (!r || !r.ok) throw Object.assign(new Error((r && r.error) || 'Something went wrong.'), { code: r && r.code });
+  if (!r || !r.ok) throw Object.assign(new Error((r && r.error) || 'Something went wrong.'), { code: r && r.code, detail: r && r.detail });
   return r.data;
 }
 
@@ -88,7 +88,7 @@ const S = {
   cfg: { instances: [], activeInstanceId: null, hasCurseforgeKey: false, installed: {}, version: '' },
   gameVersions: [],
   view: 'browse',
-  browse: { source: 'modrinth', type: 'mod', query: '', gameVersion: '', loader: '', sort: 'relevance', page: 0, results: null, scroll: 0 },
+  browse: { source: 'modrinth', type: 'mod', query: '', gameVersion: '', loader: '', category: '', sort: 'relevance', page: 0, results: null, scroll: 0 },
   project: null,
   library: { type: 'mod' },
 };
@@ -191,6 +191,13 @@ function drawJobs() {
     h('div', { class: 'job-line' }, h('div', { class: 'xp' }, fill), h('span', {}, j.total ? `${pct}%` : fmtSize(j.received))));
 }
 
+// The background check of the instance's files finished: what counts as installed may have grown.
+window.modion.onInstalled((ids) => {
+  if (!ids || typeof ids !== 'object') return;
+  S.cfg.installed = ids;
+  paintInstalls();
+});
+
 window.modion.onDownload((d) => {
   if (!d || !d.id) return;
   if (d.state === 'progress') jobs.set(d.id, d);
@@ -284,7 +291,7 @@ function renderRail() {
     h('div', { class: 'nav-label' }, 'Browse'),
     ...Object.entries(SOURCES).map(([id, name]) =>
       item(P ? P.from === 'browse' && P.hit.source === id : S.view === 'browse' && S.browse.source === id, id, name, () => {
-        if (S.browse.source !== id) invalidateResults({ source: id });
+        if (S.browse.source !== id) invalidateResults({ source: id, category: '' }); // each site has its own categories
         go('browse');
       })),
     h('div', { class: 'nav-label' }, 'Installed'),
@@ -300,7 +307,7 @@ function renderTop() {
   let title, tabs, back = null;
   if (S.view === 'browse') {
     title = SOURCES[S.browse.source];
-    tabs = typeTabs(S.browse.type, (type) => { if (type !== S.browse.type) invalidateResults({ type }); render(); });
+    tabs = typeTabs(S.browse.type, (type) => { if (type !== S.browse.type) invalidateResults({ type, category: '' }); render(); });
   } else if (S.view === 'library') {
     const inst = activeInst();
     title = inst ? `Library / ${inst.name}` : 'Library';
@@ -357,7 +364,54 @@ function renderBottom() {
   drawJobs();
 }
 
+// Back and forward. Every redraw notes where the app is; a new place is added to the
+// history, the same place is left alone. Tabs inside a project page do not count as places.
+const nav = { stack: [], at: -1, moving: false };
+const navKey = (n) => [n.view, n.source, n.btype, n.ltype, n.project ? `${n.project.hit.source}:${n.project.hit.id}` : ''].join('|');
+
+function navRecord() {
+  if (nav.moving) return;
+  const now = { view: S.view, source: S.browse.source, btype: S.browse.type, ltype: S.library.type, project: S.view === 'project' ? S.project : null };
+  if (nav.at >= 0 && navKey(nav.stack[nav.at]) === navKey(now)) { nav.stack[nav.at] = now; return; }
+  nav.stack.length = nav.at + 1; // going somewhere new drops the "forward" places
+  nav.stack.push(now);
+  if (nav.stack.length > 100) nav.stack.shift();
+  nav.at = nav.stack.length - 1;
+}
+
+function navMove(step) {
+  if (!$('#overlay').hidden) { if (step < 0) closeScreen(); return; } // back closes an open dialog first
+  const to = nav.stack[nav.at + step];
+  if (!to) return;
+  if (S.view === 'browse') S.browse.scroll = ($('#results') || {}).scrollTop || 0;
+  nav.at += step;
+  nav.moving = true;
+  try {
+    if (to.source !== S.browse.source || to.btype !== S.browse.type) invalidateResults({ source: to.source, type: to.btype, category: '' });
+    S.library.type = to.ltype;
+    if (to.project) S.project = to.project;
+    S.view = to.view;
+    render();
+  } finally {
+    nav.moving = false;
+  }
+}
+
+// The side buttons of a mouse arrive as buttons 3 (back) and 4 (forward).
+window.addEventListener('mousedown', (e) => { if (e.button === 3 || e.button === 4) e.preventDefault(); });
+window.addEventListener('mouseup', (e) => {
+  if (e.button !== 3 && e.button !== 4) return;
+  e.preventDefault();
+  navMove(e.button === 3 ? -1 : 1);
+});
+window.addEventListener('keydown', (e) => {
+  if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+  e.preventDefault();
+  navMove(e.key === 'ArrowLeft' ? -1 : 1);
+});
+
 function render() {
+  navRecord();
   renderRail();
   renderTop();
   renderBottom();
@@ -382,18 +436,19 @@ function paintInstall(b) {
   const key = b.dataset.install, ver = b.dataset.version;
   const installed = ver ? S.cfg.installed[key] === ver : key in S.cfg.installed;
   const working = busy.has(key);
-  b.textContent = working ? 'Installing...' : installed ? 'Installed' : 'Install';
+  b.textContent = working ? (b.dataset.label ? 'Waiting...' : 'Installing...') : installed ? 'Installed' : b.dataset.label || 'Install';
   b.disabled = working || installed;
 }
 
 const paintInstalls = () => document.querySelectorAll('button[data-install]').forEach(paintInstall);
 
-function installButton(req, cls) {
+function installButton(req, cls, { label, run = doInstall } = {}) {
   const b = h('button', {
     class: `btn green ${cls || ''}`,
     'data-install': `${req.source}:${req.projectId}`,
     'data-version': req.versionId || null,
-    onclick: (e) => { e.stopPropagation(); doInstall(req); },
+    'data-label': label || null,
+    onclick: (e) => { e.stopPropagation(); run(req); },
   });
   paintInstall(b);
   return b;
@@ -409,6 +464,7 @@ async function doInstall(req) {
   if (busy.has(key)) return;
   busy.add(key);
   paintInstalls();
+  let fromWebsite = null;
   try {
     const r = await api('install', req);
     if (r && r.installed_ids) S.cfg.installed = r.installed_ids;
@@ -417,7 +473,34 @@ async function doInstall(req) {
       toast('Newest file installed', 'This instance has no game version set, so compatibility was not checked.', { tone: 'gold', time: 9000 });
     }
   } catch (e) {
-    fail(e, 'Install failed');
+    // The author only offers this file on the website: carry on there.
+    if (e.code === 'BLOCKED' && e.detail && e.detail.versionId) fromWebsite = { ...req, versionId: e.detail.versionId };
+    else fail(e, 'Install failed');
+  } finally {
+    busy.delete(key);
+    paintInstalls();
+  }
+  if (fromWebsite) doWebInstall(fromWebsite);
+}
+
+// Opens the file's own page on CurseForge. The person presses Download there; Modion
+// waits for that file and puts it in the instance.
+async function doWebInstall(req) {
+  if (!activeInst()) {
+    toast('No instance selected', 'Choose where mods should be installed.');
+    openInstances();
+    return;
+  }
+  const key = `${req.source}:${req.projectId}`;
+  if (busy.has(key)) return;
+  busy.add(key);
+  paintInstalls();
+  toast('Download it on the website', 'This file is only offered on CurseForge. Press Download in the window that opens and Modion will put the file in place.', { time: 10000 });
+  try {
+    const r = await api('install.viaWebsite', req);
+    if (r && r.installed_ids) S.cfg.installed = r.installed_ids;
+  } catch (e) {
+    if (e.code !== 'CANCELLED') fail(e, 'Website download failed');
   } finally {
     busy.delete(key);
     paintInstalls();
@@ -454,8 +537,8 @@ async function loadResults() {
   pager.replaceChildren();
   let res = null, error = null;
   try {
-    const { source, type, query, gameVersion, loader, sort, page } = b;
-    res = await api('search', { source, type, query, gameVersion, loader, sort, page });
+    const { source, type, query, gameVersion, loader, category, sort, page } = b;
+    res = await api('search', { source, type, query, gameVersion, loader, category, sort, page });
   } catch (e) {
     error = e;
   }
@@ -497,6 +580,8 @@ function drawResults() {
     h('div'));
 }
 
+const categoryLists = new Map(); // "source:type" -> [{ id, label }]
+
 // The search box updates the query at once and searches a moment after typing stops.
 let searchTimer = null;
 
@@ -518,12 +603,31 @@ function viewBrowse(v) {
       searchTimer = setTimeout(() => { searchTimer = null; invalidateResults(); loadResults(); }, 350);
     },
   });
+  // Categories differ per site and content type; the menu fills in once they have loaded.
+  const catKey = `${b.source}:${b.type}`;
+  const catOptions = () => [['', 'Any category'], ...(categoryLists.get(catKey) || []).map((c) => [c.id, c.label])];
+  const category = select(catOptions(), b.category, (val) => change({ category: val }));
+  if (!categoryLists.has(catKey)) {
+    api('meta.categories', { source: b.source, type: b.type }).then((list) => {
+      if (!Array.isArray(list)) return;
+      categoryLists.set(catKey, list);
+      const menu = category.firstChild;
+      if (menu.isConnected) menu.replaceChildren(...catOptions().map(([val, label]) => h('option', { value: val, selected: val === b.category }, label)));
+    }).catch(() => {}); // e.g. CurseForge without a key: the menu just stays at "Any category"
+  }
+  // Browsing for a different version or loader than the selected instance is allowed, but flagged.
+  const inst = activeInst();
+  const mismatch = inst && ((inst.gameVersion && b.gameVersion !== inst.gameVersion) || (b.type === 'mod' && inst.loader && b.loader !== inst.loader));
   v.append(
     h('div', { class: 'bar' },
       search,
+      category,
       versionSelect(b.gameVersion, 'Any version', (gameVersion) => change({ gameVersion })),
       b.type === 'mod' && select(Object.entries(LOADERS), b.loader, (loader) => change({ loader })),
       select(Object.entries(SORTS), b.sort, (sort) => change({ sort }))),
+    mismatch && h('div', { class: 'bar warn' },
+      h('span', {}, `These filters do not match "${inst.name}" (${instLabel(inst)}). What is listed here may have no file that works in that instance.`),
+      h('div', { class: 'push' }, btn('Match Instance', () => change({ gameVersion: inst.gameVersion || b.gameVersion, loader: inst.loader || b.loader }), 'small'))),
     h('div', { class: 'list', id: 'results' }),
     h('div', { class: 'pager', id: 'pager' }));
   if (b.results) drawResults(); else loadResults();
@@ -573,7 +677,7 @@ function versionRow(d, v) {
     }, 'small');
     actions = [install, save];
   } else {
-    actions = [btn('Website Only', () => api('openExternal', { url: d.url }).catch(fail), 'small')];
+    actions = [installButton(req, 'small', { label: 'Get from Website', run: doWebInstall })];
   }
   const channel = String(v.channel || 'release');
   const mc = v.gameVersions.length > 4 ? `${v.gameVersions.slice(0, 4).join(', ')} +${v.gameVersions.length - 4}` : v.gameVersions.join(', ');
@@ -701,7 +805,7 @@ function viewLibrary(v) {
     if (!res.files.length) {
       list.replaceChildren(message(
         h('p', {}, `No ${TYPES[type].toLowerCase()} in this instance yet`),
-        btn(`Browse ${TYPES[type]}`, () => { invalidateResults({ type }); go('browse'); })));
+        btn(`Browse ${TYPES[type]}`, () => { invalidateResults({ type, category: '' }); go('browse'); })));
       return;
     }
     list.replaceChildren(...res.files.map((f) => {
@@ -807,7 +911,7 @@ function viewSettings(v) {
         h('a', { href: 'https://console.curseforge.com/' }, 'console.curseforge.com'), '.'),
       status,
       h('div', { class: 'bar' }, key, save, forget),
-      h('p', { class: 'label' }, 'The key is stored in Modion\'s config folder, readable only by your user. Some CurseForge authors switch off third-party downloads; those files show a "Website Only" button.')),
+      h('p', { class: 'label' }, 'The key is stored in Modion\'s config folder, readable only by your user. Some CurseForge authors switch off third-party downloads; for those files Modion opens the CurseForge page so you can press Download there, and puts the file in place.')),
     h('div', { class: 'panel' },
       h('h2', {}, 'Instances'),
       h('p', {}, `${S.cfg.instances.length} instance${S.cfg.instances.length === 1 ? '' : 's'} set up. Removed files go to the trash, and new versions replace old ones.`),

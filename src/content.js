@@ -147,6 +147,32 @@ function sha1File(file, size, mtime) {
   });
 }
 
+// CurseForge identifies files by a MurmurHash2 (seed 1) of their bytes with whitespace removed.
+const printCache = new Map();
+async function fingerprintFile(file, size, mtime) {
+  const id = `${file}|${size}|${mtime}`;
+  if (printCache.has(id)) return printCache.get(id);
+  if (size > 256 * 2 ** 20) return null;
+  const raw = await fsp.readFile(file);
+  const data = Buffer.allocUnsafe(raw.length);
+  let n = 0;
+  for (const b of raw) if (b !== 9 && b !== 10 && b !== 13 && b !== 32) data[n++] = b;
+  const m = 0x5bd1e995;
+  let h = (1 ^ n) >>> 0, i = 0;
+  for (; i + 4 <= n; i += 4) {
+    let k = data.readUInt32LE(i);
+    k = Math.imul(k, m); k ^= k >>> 24; k = Math.imul(k, m);
+    h = Math.imul(h, m) ^ k;
+  }
+  if (n - i === 3) h ^= data[i + 2] << 16;
+  if (n - i >= 2) h ^= data[i + 1] << 8;
+  if (n - i >= 1) { h ^= data[i]; h = Math.imul(h, m); }
+  h ^= h >>> 13; h = Math.imul(h, m); h ^= h >>> 15;
+  const print = h >>> 0;
+  printCache.set(id, print);
+  return print;
+}
+
 // Reads one content folder and brings the manifest in line with it: forgets entries whose
 // files are gone and asks Modrinth (by hash) what the files nobody recorded are.
 // Runs concurrently with installs, so it re-checks before every write to the manifest.
@@ -212,6 +238,44 @@ async function scan({ store, sources }, inst, type) {
       }
     }
   }
+  // Cross-links: the same file usually exists on the other site too. Recording that project
+  // lets a mod installed from Modrinth show as installed on CurseForge, and the reverse.
+  // Each lookup is tried until it gets an answer (it is skipped while offline or without a key).
+  entries = tracked();
+  if (entries) {
+    const known = files.map((f) => ({ f, e: entries[f.key] }))
+      .filter(({ f, e }) => e && !e.unknown && e.projectId && e.size === f.size && e.mtime === f.mtime);
+    const forModrinth = known.filter(({ e }) => e.source !== 'modrinth' && !e.linkedModrinth);
+    const cf = sources.curseforge;
+    const forCurseforge = cf && cf.hasKey() ? known.filter(({ e }) => e.source !== 'curseforge' && !e.linkedCurseforge) : [];
+    if (forModrinth.length) {
+      try {
+        const hashes = new Map();
+        for (const x of forModrinth) hashes.set(x, await sha1File(path.join(dir, x.f.file), x.f.size, x.f.mtime));
+        const found = await sources.modrinth.identify([...new Set(hashes.values())]);
+        for (const [x, hash] of hashes) {
+          if (found[hash]) x.e.also = { ...x.e.also, modrinth: found[hash].projectId };
+          x.e.linkedModrinth = true;
+        }
+        dirty = true;
+      } catch {}
+    }
+    if (forCurseforge.length) {
+      try {
+        const prints = new Map();
+        for (const x of forCurseforge) {
+          const print = await fingerprintFile(path.join(dir, x.f.file), x.f.size, x.f.mtime);
+          if (print !== null) prints.set(x, print);
+        }
+        const found = await cf.fingerprints([...new Set(prints.values())]);
+        for (const [x, print] of prints) {
+          if (found[print]) x.e.also = { ...x.e.also, curseforge: found[print] };
+          x.e.linkedCurseforge = true;
+        }
+        dirty = true;
+      } catch {}
+    }
+  }
   if (dirty && tracked()) store.saveManifest();
   return { dir, files };
 }
@@ -264,7 +328,8 @@ async function installNow(ctx, req, emit) {
       throw new ApiError(`${meta.title} has no file for ${target}.`, 'NO_VERSION');
     }
     if (!v.file) {
-      throw new ApiError(`${meta.title}: the author only allows downloads from the CurseForge website.`, 'BLOCKED');
+      throw new ApiError(`${meta.title}: the author only allows downloads from the CurseForge website.`, 'BLOCKED', undefined,
+        isDep ? undefined : { projectId, versionId: v.id });
     }
 
     const base = { id: crypto.randomUUID(), title: meta.title, filename: v.file.filename };
@@ -326,6 +391,46 @@ async function installNow(ctx, req, emit) {
 
   await one(req.projectId, req.versionId || null, req.title ? { title: String(req.title), icon: req.icon || null } : null, false, want);
   return result;
+}
+
+// Takes over a file that was downloaded by hand from the website (see webinstall.js):
+// moves it into place and records it exactly as an install would.
+function adoptFile({ store, trash }, inst, req, tmp, v) {
+  return exclusive(async () => {
+    const folder = folderFor(req.type);
+    const filename = safeName(v.expected.filename);
+    const dest = path.join(inst.path, folder, filename);
+    const key = `${folder}/${filename}`;
+    const projectId = String(req.projectId);
+    const bin = async (p) => {
+      if (!fs.existsSync(p)) return;
+      try { await trash(p); } catch {
+        if (!p.endsWith(OFF) && !fs.existsSync(p + OFF)) await fsp.rename(p, p + OFF).catch(() => {});
+      }
+    };
+    try { await fsp.rename(tmp, dest); } catch (e) {
+      await fsp.rm(tmp, { force: true }).catch(() => {});
+      throw fsProblem(e, `Could not save ${filename}`);
+    }
+    await bin(dest + OFF);
+    const entries = store.instance(inst.id) ? store.entries(inst.id) : null;
+    if (!entries) return filename;
+    const prior = Object.entries(entries).find(([k, e]) => k.startsWith(folder + '/') && e.source === req.source && String(e.projectId) === projectId);
+    if (prior && prior[0] !== key) {
+      await bin(path.join(inst.path, prior[0]));
+      await bin(path.join(inst.path, prior[0]) + OFF);
+      if (!exists(path.join(inst.path, prior[0]))) delete entries[prior[0]];
+    }
+    let st = null;
+    try { st = await fsp.stat(dest); } catch {}
+    entries[key] = {
+      source: req.source, projectId, versionId: v.id, versionName: v.versionNumber || v.name,
+      title: req.title || v.name, icon: req.icon || null, type: req.type,
+      ...(st ? { size: st.size, mtime: st.mtimeMs } : {}),
+    };
+    store.saveManifest();
+    return filename;
+  });
 }
 
 // "Save As": one file into a folder of the user's choosing; nothing is tracked.
@@ -404,9 +509,14 @@ function installedIds(store) {
   const out = {};
   if (!inst) return out;
   for (const [key, e] of Object.entries(store.entries(inst.id))) {
-    if (e.projectId && exists(path.join(inst.path, key))) out[`${e.source}:${e.projectId}`] = e.versionId;
+    if (!e.projectId || !exists(path.join(inst.path, key))) continue;
+    out[`${e.source}:${e.projectId}`] = e.versionId;
+    // The same file's project on the other site counts as installed too (version unknown there).
+    for (const [site, id] of Object.entries(e.also || {})) {
+      if (id && !Object.hasOwn(out, `${site}:${id}`)) out[`${site}:${id}`] = null;
+    }
   }
   return out;
 }
 
-module.exports = { download, install, saveTo, list, toggle, remove, installedIds, discardPartials, FOLDER };
+module.exports = { download, install, adoptFile, activeInstance, saveTo, list, toggle, remove, installedIds, discardPartials, FOLDER };

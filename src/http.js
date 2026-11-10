@@ -4,10 +4,12 @@ const UA = 'modion/0.1.0 (Linux desktop mod manager)';
 
 // An error whose message is written for the person using the app.
 class ApiError extends Error {
-  constructor(message, code, status) {
+  // `detail` is small structured data the interface can act on (e.g. which file was blocked).
+  constructor(message, code, status, detail) {
     super(message);
     this.code = code || 'API_ERROR';
     this.status = status;
+    this.detail = detail;
   }
 }
 

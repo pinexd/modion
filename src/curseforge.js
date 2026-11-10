@@ -89,6 +89,8 @@ function normFile(f) {
     downloads: f.downloadCount,
     // downloadUrl is null when the author has opted out of third-party downloads.
     file: usable ? { url: f.downloadUrl, filename: f.fileName, size: f.fileLength || 0, sha1: sha1 && sha1.value } : null,
+    // What the file must be, however it is obtained (used when it is downloaded from the website by hand).
+    expected: f.fileName ? { filename: f.fileName, size: f.fileLength || 0, sha1: sha1 && sha1.value } : null,
     blocked: !usable,
     dependencies: arr(f.dependencies)
       .filter((d) => d && d.relationType === 3 && d.modId)
@@ -96,13 +98,14 @@ function normFile(f) {
   };
 }
 
-async function search({ type = 'mod', query = '', gameVersion, loader, sort = 'relevance', page = 0 }) {
+async function search({ type = 'mod', query = '', gameVersion, loader, category, sort = 'relevance', page = 0 }) {
   const index = page * PAGE;
   if (index + PAGE > MAX_INDEX) throw new ApiError('CurseForge only serves the first 10,000 results. Narrow the search instead.', 'RANGE');
   const res = await cf('/mods/search', {
     gameId: GAME,
     classId: CLASS[type] || CLASS.mod,
     searchFilter: query,
+    categoryId: /^\d+$/.test(category || '') ? category : undefined,
     gameVersion,
     modLoaderType: type === 'mod' && loader ? LOADER[loader] : undefined,
     sortField: SORT[sort] || (query ? undefined : 2),
@@ -159,7 +162,33 @@ async function latest(projectId, opts) {
 
 async function brief(projectId) {
   const m = await cfObject(`/mods/${encodeURIComponent(projectId)}`);
-  return { title: m.name || String(projectId), icon: (m.logo && m.logo.thumbnailUrl) || null };
+  return { title: m.name || String(projectId), icon: (m.logo && m.logo.thumbnailUrl) || null, url: (m.links && m.links.websiteUrl) || null };
+}
+
+const categoryCache = new Map();
+async function categories(type) {
+  const classId = CLASS[type] || CLASS.mod;
+  if (!categoryCache.has(classId)) {
+    const list = arr((await cf('/categories', { gameId: GAME, classId })).data)
+      .filter((c) => c && !c.isClass && c.name)
+      .map((c) => ({ id: String(c.id), label: String(c.name) }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    categoryCache.set(classId, list);
+  }
+  return categoryCache.get(classId);
+}
+
+// Which CurseForge projects do these local files belong to? Takes CurseForge's own file
+// fingerprints and returns { fingerprint: projectId }.
+async function fingerprints(list) {
+  const out = {};
+  for (let i = 0; i < list.length; i += 200) {
+    const reply = await cf(`/fingerprints/${GAME}`, null, { fingerprints: list.slice(i, i + 200) });
+    for (const m of arr(reply.data && reply.data.exactMatches)) {
+      if (m && m.file && m.file.fileFingerprint !== undefined && m.file.modId) out[m.file.fileFingerprint] = String(m.file.modId);
+    }
+  }
+  return out;
 }
 
 // Several files by ID in one request (used when importing a modpack).
@@ -173,4 +202,4 @@ async function testKey() {
   return true;
 }
 
-module.exports = { setKey, getKey, hasKey, search, project, versions, getVersion, getFiles, latest, brief, testKey };
+module.exports = { setKey, getKey, hasKey, search, project, versions, getVersion, getFiles, latest, brief, categories, fingerprints, testKey };

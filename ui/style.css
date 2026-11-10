@@ -155,6 +155,7 @@ select option { background: var(--field); color: #fff; }
 #view > .bar { padding: 14px 24px; border-bottom: 1px solid var(--line); }
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .bar .grow { flex: 1; min-width: 180px; }
+#view > .bar.warn { padding: 8px 24px; background: #4a3a12; color: #ffd98a; }
 .bar .push { margin-left: auto; }
 
 .list { flex: 1; min-height: 0; overflow-y: auto; }

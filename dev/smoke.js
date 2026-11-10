@@ -393,6 +393,89 @@ require('../main.js').ready.then(async (win) => {
     await js(`api('instances.setActive', { id: '${foreign}' }).then((c) => { setConfig(c); go('browse'); })`);
   });
 
+  await step('category filter, filter-mismatch warning, and back/forward buttons', async () => {
+    await js(`go('browse')`);
+    await waitFor(`S.browse.results && document.querySelectorAll('#view .bar select')[0].options.length > 8`, 'category menu');
+    const all = await js(`S.browse.results.total`);
+    await js(`(() => { const m = document.querySelectorAll('#view .bar select')[0]; m.value = 'optimization'; m.dispatchEvent(new Event('change')); })()`);
+    await waitFor(`S.browse.results && S.browse.category === 'optimization'`, 'filtered results');
+    expect(await js(`S.browse.results.total`) < all, 'the category did not narrow the results');
+    expect(!(await js(`Boolean(document.querySelector('.warn'))`)), 'warning shown while the filters match the instance');
+    await js(`(() => { const m = document.querySelectorAll('#view .bar select')[2]; m.value = 'forge'; m.dispatchEvent(new Event('change')); })()`);
+    await waitFor(`document.querySelector('.warn')`, 'mismatch warning');
+    await shot('17-filters');
+    await js(`document.querySelector('.warn .btn').click()`);
+    await waitFor(`!document.querySelector('.warn') && S.browse.loader === 'fabric'`, 'filters matched to the instance again');
+
+    const side = (button) => js(`window.dispatchEvent(new MouseEvent('mouseup', { button: ${button}, cancelable: true }))`);
+    await waitFor(`S.browse.results && document.querySelector('#results .row')`, 'results');
+    await js(`document.querySelector('#results .row').click()`);
+    await waitFor(`S.view === 'project'`, 'project page');
+    const project = await js(`S.project.hit.id`);
+    await js(`go('settings')`);
+    await side(3);
+    expect(await js(`S.view === 'project' && S.project.hit.id`) === project, 'back did not return to the project page');
+    await side(3);
+    expect(await js(`S.view`) === 'browse' && await js(`S.browse.category`) === 'optimization', 'back did not return to the search as it was');
+    await side(4); await side(4);
+    expect(await js(`S.view`) === 'settings', 'forward did not retrace the steps');
+    await side(4);
+    expect(await js(`S.view`) === 'settings', 'forward went past the newest place');
+    await js(`go('library')`);
+    await side(3); await side(4);
+    expect(await js(`S.view`) === 'library', 'a new place did not replace the forward history');
+    await js(`invalidateResults({ category: '' }); go('browse')`);
+  });
+
+  await step('files are matched across both sites, and a website download is captured', async () => {
+    const content = require('../src/content');
+    const modrinth = require('../src/modrinth');
+    const { Store } = require('../src/store');
+    const webinstall = require('../src/webinstall');
+    const dir = path.join(work, 'cross');
+    fs.mkdirSync(path.join(dir, 'game', 'mods'), { recursive: true });
+    const jar = jars('modmenu')[0];
+    fs.copyFileSync(path.join(mods, jar), path.join(dir, 'game', 'mods', jar));
+    fs.copyFileSync(path.join(mods, jar), path.join(dir, 'game', 'mods', 'from-cf.jar'));
+    const store = new Store(path.join(dir, 'profile'));
+    store.config.instances.push({ id: 'x', path: path.join(dir, 'game'), name: 'x', gameVersion: '1.21.1', loader: 'fabric' });
+    store.config.activeInstanceId = 'x';
+    // One file recorded as a CurseForge install; the other is found by Modrinth. CurseForge is a stand-in that knows every fingerprint.
+    store.entries('x')['mods/from-cf.jar'] = { source: 'curseforge', projectId: '777', versionId: '1', title: 'From CF' };
+    let asked = [];
+    const fakeCf = { hasKey: () => true, fingerprints: async (list) => { asked = list; return Object.fromEntries(list.map((p) => [p, '424242'])); } };
+    const ctx = { store, sources: { modrinth, curseforge: fakeCf }, trash: (p) => fs.promises.rm(p) };
+    await content.list(ctx, 'mod');
+    const ids = content.installedIds(store);
+    const mr = Object.keys(ids).find((k) => k.startsWith('modrinth:'));
+    expect(mr && ids['curseforge:777'] === '1' && Object.hasOwn(ids, 'curseforge:424242'), `cross-site links missing: ${JSON.stringify(ids)}`);
+    expect(store.entries('x')['mods/from-cf.jar'].also.modrinth === mr.slice(9), 'a CurseForge install was not linked to its Modrinth project');
+    expect(asked.length === 1 && Number.isInteger(asked[0]) && asked[0] > 0, `fingerprints sent: ${JSON.stringify(asked)}`);
+    asked = [];
+    await content.list(ctx, 'mod');
+    expect(asked.length === 0, 'files were looked up again although already linked');
+
+    // Website capture, with Modrinth's file server standing in for the CurseForge page.
+    const real = (await modrinth.versions('modmenu', { type: 'mod', gameVersion: '1.21.1', loader: 'fabric' }))[1];
+    const dest = path.join(dir, 'game', 'mods');
+    const base = { url: real.file.url, siteHosts: ['cdn.modrinth.com'], downloadHosts: ['cdn.modrinth.com'], destDir: dest, show: false };
+    let code = null;
+    try { await webinstall.open({ ...base, siteHosts: ['curseforge.com'], expect: { filename: real.file.filename } }); } catch (e) { code = e.code; }
+    expect(code === 'BAD_URL', `a page on another site was opened: ${code}`);
+    const wrong = webinstall.open({ ...base, expect: { filename: 'something-else.jar' } }).then(() => 'OK', (e) => e.code);
+    await sleep(4000);
+    webinstall.cancel();
+    expect(await wrong === 'CANCELLED' && !fs.readdirSync(dest).some((f) => f.includes('.part') || f === real.file.filename), 'an unexpected file was kept');
+    code = await webinstall.open({ ...base, expect: { filename: real.file.filename, sha1: '0'.repeat(40) } }).then(() => 'OK', (e) => e.code);
+    expect(code === 'CHECKSUM' && !fs.readdirSync(dest).some((f) => f.includes('.part')), `a file with the wrong checksum was kept: ${code}`);
+    const got = await webinstall.open({ ...base, expect: { filename: real.file.filename, sha1: real.file.sha1 } });
+    const version = { id: '9', name: 'v', versionNumber: real.file.filename, expected: { filename: real.file.filename } };
+    await content.adoptFile(ctx, store.active(), { source: 'curseforge', projectId: '777', type: 'mod', title: 'From CF' }, got.tmp, version);
+    const after = fs.readdirSync(dest);
+    expect(after.includes(real.file.filename) && !after.includes('from-cf.jar') && !after.some((f) => f.includes('.part')), `after the website download: ${after}`);
+    expect(content.installedIds(store)['curseforge:777'] === '9', 'the website download was not recorded as the installed version');
+  });
+
   await step('curseforge without a key explains itself', async () => {
     await js(`go('browse')`);
     await js(`[...document.querySelectorAll('.nav-item')].find(b => b.textContent === 'CurseForge').click()`);

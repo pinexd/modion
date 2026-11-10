@@ -40,8 +40,9 @@ function normVersion(v) {
   };
 }
 
-async function search({ type = 'mod', query = '', gameVersion, loader, sort = 'relevance', page = 0 }) {
+async function search({ type = 'mod', query = '', gameVersion, loader, category, sort = 'relevance', page = 0 }) {
   const facets = [[`project_type:${type}`]];
+  if (category) facets.push([`categories:${category}`]);
   if (gameVersion) facets.push([`versions:${gameVersion}`]);
   if (loader && type === 'mod') facets.push(accepted(loader).map((l) => `categories:${l}`));
   const data = await getJson(
@@ -138,6 +139,17 @@ async function brief(projectId) {
   return { title: p.title || p.slug || String(projectId), icon: p.icon_url || null };
 }
 
+// The tags a project type can be filtered by, as [{ id, label }].
+let categoryCache = null;
+async function categories(type) {
+  if (!categoryCache) categoryCache = arr(await getJson(`${BASE}/tag/category`)).filter((c) => c && typeof c.name === 'string');
+  const kind = type === 'datapack' ? 'mod' : type;
+  return categoryCache
+    .filter((c) => c.project_type === kind)
+    .map((c) => ({ id: c.name, label: c.name.replace(/-/g, ' ').replace(/^./, (ch) => ch.toUpperCase()) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
 // Cached once it succeeds; a failed fetch is retried on the next call, and concurrent
 // callers share one request.
 let gvCache = null, gvPending = null;
@@ -183,4 +195,4 @@ async function identify(hashes) {
   return out;
 }
 
-module.exports = { search, project, versions, getVersion, latest, brief, gameVersions, identify };
+module.exports = { search, project, versions, getVersion, latest, brief, gameVersions, categories, identify };
