@@ -265,6 +265,24 @@ async function installForge(java, wrapper, options, gameLine, name) {
   }
 }
 
+// Forge for these versions crashes on Wayland while opening its own loading window ("GLFW
+// error before init: Wayland: The platform does not provide the window position"); Forge
+// fixed it from 26.1.2 on. Forge has a setting that leaves the window to the game, and with
+// it these builds start, so that setting is switched off in the instance's Forge config.
+const FORGE_WAYLAND_CRASH = ['26.1', '26.1.1'];
+async function disableForgeEarlyWindow(gameDir) {
+  const file = path.join(gameDir, 'config', 'fml.toml');
+  let text = '';
+  try { text = await fsp.readFile(file, 'utf8'); } catch {}
+  const line = /^earlyWindowControl\s*=.*$/m;
+  if (/^earlyWindowControl\s*=\s*false\s*$/m.test(text)) return;
+  const next = line.test(text) ? text.replace(line, 'earlyWindowControl = false') : `${text}${text && !text.endsWith('\n') ? '\n' : ''}earlyWindowControl = false\n`;
+  try {
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await fsp.writeFile(file, next);
+  } catch {} // if it cannot be written, the game is still started and Forge reports its own error
+}
+
 // Old Forge is installed by putting its files into the game jar: later archives win over
 // earlier ones, and the jar's signature (META-INF) goes, since it no longer matches.
 async function mergeJars(base, patches, out) {
@@ -462,6 +480,10 @@ async function prepare(inst, progress) {
   // there before they are told the game folder. Giving them the game folder as "home"
   // keeps that stray file inside the instance instead of in the real ~/.minecraft.
   if (index.map_to_resources) jvm.push(`-Duser.home=${inst.path}`);
+
+  if (inst.loader === 'forge' && FORGE_WAYLAND_CRASH.includes(inst.gameVersion) && (process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === 'wayland')) {
+    await disableForgeEarlyWindow(inst.path);
+  }
 
   const classpath = [...built, ...[...libs.values()].map((l) => path.join(l.dir, l.filename)), gameJar];
   return { game, profile, java, classpath, natives, gameAssets, logging, jvm };
