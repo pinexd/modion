@@ -31,6 +31,7 @@ class Store {
       curseforgeKey: typeof config.curseforgeKey === 'string' ? config.curseforgeKey : '',
       msClientId: typeof config.msClientId === 'string' ? config.msClientId : '',
       launchMode: ['prism', 'account', 'offline'].includes(config.launchMode) ? config.launchMode : 'prism',
+      openLogOnLaunch: config.openLogOnLaunch !== false, // on unless switched off
       offlineName: typeof config.offlineName === 'string' ? config.offlineName : '',
     };
     if (!this.instance(this.config.activeInstanceId)) {

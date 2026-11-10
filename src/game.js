@@ -240,6 +240,9 @@ function launchArgs({ game, profile, classpath }, inst, session) {
   ];
 }
 
+// Where the output of a game Modion started itself is written.
+const outputLog = (gameDir) => path.join(ROOT, 'logs', `${crypto.createHash('sha1').update(gameDir).digest('hex').slice(0, 12)}.log`);
+
 const running = new Set(); // instance paths being prepared or just started
 
 // session: { name, uuid, token, offline? }. Resolves once the game process has stayed up
@@ -264,7 +267,7 @@ async function launch(inst, session, emit) {
       emit({ ...job, state: 'done' });
     }
     const args = launchArgs(ready, inst, session);
-    const logFile = path.join(ROOT, 'logs', `${crypto.createHash('sha1').update(inst.path).digest('hex').slice(0, 12)}.log`);
+    const logFile = outputLog(inst.path);
     await fsp.mkdir(path.dirname(logFile), { recursive: true });
     const log = fs.openSync(logFile, 'w');
     let child;
@@ -298,4 +301,4 @@ function offlineSession(name) {
   return { name, uuid: h.toString('hex'), token: '0', offline: true };
 }
 
-module.exports = { supports, launch, offlineSession, fetchAll, versionJson, ROOT };
+module.exports = { supports, launch, outputLog, offlineSession, fetchAll, versionJson, ROOT };

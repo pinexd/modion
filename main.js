@@ -111,6 +111,7 @@ function publicConfig() {
     }),
     canCreate: launcher.canCreate(),
     launchMode: store.config.launchMode,
+    openLogOnLaunch: store.config.openLogOnLaunch,
     offlineName: store.config.offlineName,
     offlineAllowed,
     msClientId: store.config.msClientId,
@@ -194,6 +195,50 @@ const methods = {
     store.config.curseforgeKey = next;
     store.saveConfig();
     return publicConfig();
+  },
+
+  'settings.setOpenLog': (a) => {
+    store.config.openLogOnLaunch = a.on === true;
+    store.saveConfig();
+    return publicConfig();
+  },
+
+  // The newest part of an instance's game log, for the Log tab. The page calls this about
+  // once a second with where it got to (`source` and `offset`) and receives what is new.
+  // Two files can hold the log: the output of a game Modion started itself, and the
+  // latest.log that Minecraft writes whichever launcher started it; the fresher one is used.
+  'log.read': async (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    let pick = null;
+    for (const file of [game.outputLog(inst.path), path.join(inst.path, 'logs', 'latest.log')]) {
+      try {
+        const st = await fs.promises.stat(file);
+        if (st.isFile() && (!pick || st.mtimeMs > pick.mtime)) pick = { file, size: st.size, mtime: st.mtimeMs };
+      } catch {}
+    }
+    if (!pick) return { source: '', offset: 0, text: '', reset: Boolean(a.source) };
+    const TAIL = 200000, CHUNK = 262144;
+    const same = a.source === pick.file && Number.isInteger(a.offset) && a.offset >= 0 && a.offset <= pick.size;
+    let offset = same ? a.offset : Math.max(0, pick.size - TAIL); // a new or restarted log is shown from near its end
+    const handle = await fs.promises.open(pick.file, 'r');
+    let data;
+    try {
+      const buf = Buffer.alloc(Math.min(CHUNK, pick.size - offset));
+      const { bytesRead } = await handle.read(buf, 0, buf.length, offset);
+      data = buf.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+    // Hand over whole lines only, so a line (or a multi-byte character) is never cut in half.
+    if (!same && offset > 0) {
+      const first = data.indexOf(10);
+      if (first >= 0) { offset += first + 1; data = data.subarray(first + 1); }
+    }
+    const last = data.lastIndexOf(10);
+    if (last >= 0) data = data.subarray(0, last + 1);
+    else if (data.length < CHUNK) data = data.subarray(0, 0); // an unfinished line: wait for the rest
+    return { source: pick.file, offset: offset + data.length, text: data.toString('utf8'), reset: !same };
   },
 
   'settings.setLaunch': (a) => {

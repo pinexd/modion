@@ -297,6 +297,30 @@ require('../main.js').ready.then(async (win) => {
     await js(`(() => { const b = document.querySelector('.play'); b.click(); b.click(); })()`);
     await sleep(600);
     expect(spawned.length === 1 && spawned[0].join(' ') === 'prismlauncher --launch Smoke TestPack', `launch command: ${JSON.stringify(spawned)}`);
+    // Starting the game switches to the live log, which follows the file as it grows.
+    await waitFor(`S.view === 'library' && S.library.type === 'log' && document.querySelector('.log')`, 'log tab after launch');
+    const logs = path.join(dir, 'minecraft', 'logs');
+    fs.mkdirSync(logs, { recursive: true });
+    fs.writeFileSync(path.join(logs, 'latest.log'), '[12:00:00] [main/INFO]: first line\n[12:00:01] [main/WARN]: careful\n');
+    await waitFor(`document.querySelectorAll('.log > div').length === 2 && document.querySelector('.log .warn')`, 'log lines', 8000);
+    fs.appendFileSync(path.join(logs, 'latest.log'), '[12:00:02] [main/ERROR]: broke \u00e9\u00e8\n[12:00:03] half a li');
+    await waitFor(`document.querySelectorAll('.log > div').length === 3 && document.querySelector('.log .err').textContent.endsWith('\u00e9\u00e8')`, 'appended line', 8000);
+    fs.appendFileSync(path.join(logs, 'latest.log'), 'ne\n');
+    await waitFor(`document.querySelectorAll('.log > div').length === 4 && document.querySelector('.log').lastChild.textContent.endsWith('half a line')`, 'line completed later', 8000);
+    await shot('18-log');
+    fs.writeFileSync(path.join(logs, 'latest.log'), '[13:00:00] [main/INFO]: new session\n'); // the game was restarted
+    await waitFor(`document.querySelectorAll('.log > div').length === 1 && document.querySelector('.log').textContent.includes('new session')`, 'restarted log', 8000);
+    await js(`S.instancesTab = 'log'; go('instances')`);
+    await waitFor(`document.querySelector('.log') && document.querySelector('.log').textContent.includes('new session')`, 'log tab on the instances page', 8000);
+    await js(`S.instancesTab = 'all'; go('browse')`);
+    expect((await js(`window.modion.call('settings.setOpenLog', { on: false }).then((r) => r.data.openLogOnLaunch)`)) === false, 'the log setting did not switch off');
+    await js(`api('config.get').then(setConfig)`);
+    spawned.length = 0;
+    await sleep(4200); // Play re-enables after a few seconds
+    await js(`document.querySelector('.play').click()`);
+    await sleep(700);
+    expect(spawned.length === 1 && await js(`S.view`) === 'browse', 'with the setting off, launching still switched to the log');
+    await js(`window.modion.call('settings.setOpenLog', { on: true })`);
     await js(`api('instances.setActive', { id: S.cfg.instances[0].id }).then((c) => { setConfig(c); render(); })`); // back to the test folder
   });
 

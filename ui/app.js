@@ -311,7 +311,8 @@ function renderTop() {
   } else if (S.view === 'library') {
     const inst = activeInst();
     title = inst ? `Library / ${inst.name}` : 'Library';
-    tabs = typeTabs(S.library.type, (type) => { S.library.type = type; render(); });
+    tabs = [...typeTabs(S.library.type, (type) => { S.library.type = type; render(); }),
+      tab('Log', S.library.type === 'log', () => { S.library.type = 'log'; render(); })];
   } else if (S.view === 'project') {
     const P = S.project;
     title = P.hit.title;
@@ -320,7 +321,8 @@ function renderTop() {
       .map(([id, label]) => tab(label, P.tab === id, () => { P.tab = id; render(); }));
   } else if (S.view === 'instances') {
     title = 'Instances';
-    tabs = [tab('All', true, () => {})];
+    tabs = [tab('All', S.instancesTab !== 'log', () => { S.instancesTab = 'all'; render(); }),
+      tab('Log', S.instancesTab === 'log', () => { S.instancesTab = 'log'; render(); })];
   } else {
     title = 'Settings';
     tabs = [tab('General', true, () => {})];
@@ -353,6 +355,7 @@ function renderBottom() {
       try {
         const r = await api('instances.launch', { id: inst.id });
         toast(r.play ? `Starting ${inst.name}` : `Opening ${r.label}`, r.play ? `${r.label} is launching the game.` : `Start "${inst.name}" from there.`);
+        if (S.cfg.openLogOnLaunch !== false) { S.library.type = 'log'; go('library'); } // watch the game start
       } catch (e) { fail(e, 'Could not start the game'); }
       setTimeout(() => { play.disabled = false; }, 4000); // long enough that a double click cannot start it twice
       play.textContent = label;
@@ -411,6 +414,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 function render() {
+  clearInterval(logTimer); // the Log tab restarts its own polling when it is drawn
   navRecord();
   renderRail();
   renderTop();
@@ -768,6 +772,49 @@ function viewProject(v) {
         link('Source code', L.source), link('Issue tracker', L.issues), link('Wiki', L.wiki), link('Discord', L.discord)))));
 }
 
+/* ---------- game log ---------- */
+
+let logTimer = null;
+const LOG_LINES = 4000; // the view keeps this many lines; the full log stays in its file
+
+// Live view of the selected instance's game log: asks for what is new once a second and
+// keeps the view pinned to the bottom unless the reader has scrolled up.
+function viewLog(v, inst) {
+  const where = h('span', { class: 'dim path' });
+  const out = h('div', { class: 'log' });
+  const box = h('div', { class: 'list' }, out);
+  const follow = check('Follow', true, () => { if (follow.firstChild.checked) box.scrollTop = box.scrollHeight; });
+  v.append(h('div', { class: 'bar' }, h('span', {}, `Game log of ${inst.name}`), where, h('div', { class: 'push' }, follow)), box);
+  box.addEventListener('scroll', () => { follow.firstChild.checked = box.scrollHeight - box.scrollTop - box.clientHeight < 40; });
+
+  let source = '', offset = 0, waiting = false, empty = true;
+  const note = (text) => { out.replaceChildren(h('div', { class: 'faint' }, text)); empty = true; };
+  note('Waiting for the game to write a log...');
+  const poll = async () => {
+    if (waiting || !out.isConnected) return;
+    waiting = true;
+    let r = null;
+    try { r = await api('log.read', { id: inst.id, source, offset }); } catch {}
+    waiting = false;
+    if (!r || !out.isConnected) return;
+    if (r.reset) note(r.source ? '' : 'No log yet. It appears here once the game has been started.');
+    source = r.source;
+    offset = r.offset;
+    where.textContent = r.source ? '\u200e' + r.source : '';
+    if (!r.text) return;
+    if (empty) { out.replaceChildren(); empty = false; }
+    for (const line of r.text.split('\n')) {
+      if (!line) continue;
+      const tone = /\b(ERROR|FATAL|Exception|Caused by)\b|^\s+at /.test(line) ? 'err' : /\bWARN\b/.test(line) ? 'warn' : '';
+      out.append(h('div', { class: tone }, line));
+    }
+    while (out.childElementCount > LOG_LINES) out.firstChild.remove();
+    if (follow.firstChild.checked) box.scrollTop = box.scrollHeight;
+  };
+  poll();
+  logTimer = setInterval(poll, 1000);
+}
+
 /* ---------- library ---------- */
 
 function viewLibrary(v) {
@@ -780,6 +827,7 @@ function viewLibrary(v) {
       btn('Select Instance...', () => openInstances()))));
     return;
   }
+  if (lib.type === 'log') { viewLog(v, inst); return; }
   const list = h('div', { class: 'list' }, loading('Reading folder...'));
   const summary = h('span', { class: 'dim' });
   v.append(
@@ -897,6 +945,8 @@ function viewSettings(v) {
       h('div', { class: 'bar' }, select(modes, mode, (val) => setLaunch({ mode: val }))),
       mode === 'offline' && h('div', { class: 'bar' }, offlineName, btn('Save Name', () => setLaunch({ offlineName: offlineName.value }))),
       h('p', {}, modeNote),
+      h('div', { class: 'bar' }, check('Show the game log when the game is started', S.cfg.openLogOnLaunch !== false,
+        (on) => act(api('settings.setOpenLog', { on }), 'Setting not saved'))),
       h('p', { class: 'label' }, 'Starting directly works for vanilla, Fabric and Quilt on Minecraft 1.19 and newer. Other instances always use the launcher that owns them; the line under the Play button says which.')),
     h('div', { class: 'panel' },
       h('h2', {}, 'Minecraft account'),
@@ -1052,6 +1102,12 @@ function renameInstance(i) {
 }
 
 function viewInstances(v) {
+  if (S.instancesTab === 'log') {
+    const inst = activeInst();
+    if (inst) viewLog(v, inst);
+    else v.append(h('div', { class: 'list' }, message(h('p', {}, 'No instance selected'), h('p', { class: 'dim' }, 'Select an instance to see its game log.'))));
+    return;
+  }
   const redraw = () => { if (S.view === 'instances') render(); };
   const change = async (call, title) => {
     try { setConfig(await call, { follow: true }); } catch (e) { fail(e, title); }

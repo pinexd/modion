@@ -240,6 +240,12 @@ a { color: var(--link); cursor: pointer; }
 .prose [align="center"], .prose center { text-align: center; }
 .prose [align="right"] { text-align: right; }
 
+/* ---------- game log ---------- */
+.log { padding: 10px 24px 16px; font: 12px/1.5 ui-monospace, 'Noto Sans Mono', monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; cursor: text; color: #d6d6d6; }
+.log .err { color: #ff8a8a; }
+.log .warn { color: #ffd98a; }
+#view > .bar .path { flex: 1; min-width: 0; }
+
 /* ---------- settings ---------- */
 .settings { width: min(780px, 100%); margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
 .panel { padding: 18px 20px; background: var(--head); border: 1px solid #1a1a1a; }
