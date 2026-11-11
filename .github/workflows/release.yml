@@ -74,8 +74,9 @@ jobs:
 
       - name: Create the release
         run: |
-          printf '%s\n' "$NOTES" > notes.md
-          args=(--title "${TITLE:-Modion $TAG}" --notes-file notes.md)
+          NOTES_FILE="$RUNNER_TEMP/notes.md"
+          printf '%s\n' "$NOTES" > "$NOTES_FILE"
+          args=(--title "${TITLE:-Modion $TAG}" --notes-file "$NOTES_FILE")
           # With a signing key, the tag is signed so GitHub shows the release as Verified.
           # The matching public key must be a *signing* key on the account named below.
           if [ -n "$SIGNING_KEY_B64" ]; then
