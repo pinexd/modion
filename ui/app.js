@@ -78,7 +78,8 @@ const btn = (label, onclick, cls) => h('button', { class: `btn ${cls || ''}`, on
 
 function select(options, value, onchange) {
   const s = h('select', { class: 'field', onchange: () => onchange(s.value) },
-    options.map(([v, label]) => h('option', { value: v, selected: v === value }, label)));
+    // A third item switches an option off (it stays visible, greyed out).
+    options.map(([v, label, off]) => h('option', { value: v, selected: v === value, disabled: Boolean(off) }, label)));
   return h('label', { class: 'sel' }, s);
 }
 
@@ -1013,7 +1014,8 @@ function viewSettings(v) {
   // How Play starts the game.
   const mode = S.cfg.launchMode || 'account';
   const setLaunch = (patch) => act(api('settings.setLaunch', { mode, offlineName: S.cfg.offlineName || '', ...patch }), 'Setting not saved');
-  const modes = [['prism', 'Through Prism Launcher'], ['account', 'Directly, with my Microsoft account']];
+  const noPrism = S.cfg.prismInstalled === false;
+  const modes = [['account', 'Directly, with my Microsoft account'], ['prism', noPrism ? 'Through Prism Launcher (not installed)' : 'Through Prism Launcher', noPrism && mode !== 'prism']];
   if (S.cfg.offlineAllowed) modes.push(['offline', 'Directly, offline (this developer machine only)']);
   const offlineName = h('input', { class: 'field', value: S.cfg.offlineName || '', placeholder: 'Player name', spellcheck: false, maxLength: 16 });
   const modeNote = mode === 'prism'
@@ -1068,7 +1070,8 @@ function viewSettings(v) {
   add(v, h('div', { class: 'settings' },
     h('div', { class: 'panel' },
       h('h2', {}, 'Starting the game'),
-      h('div', { class: 'bar' }, select(modes, mode, (val) => setLaunch({ mode: val }))),
+      h('div', { class: 'bar' }, select(modes, mode, (val) => setLaunch({ mode: val })),
+        noPrism && h('span', { class: 'faint small' }, 'The Prism option is only available if Prism Launcher is installed.')),
       mode === 'offline' && h('div', { class: 'bar' }, offlineName, btn('Save Name', () => setLaunch({ offlineName: offlineName.value }))),
       h('p', {}, modeNote),
       h('div', { class: 'bar' }, check('Show the game log when the game is started', S.cfg.openLogOnLaunch !== false,

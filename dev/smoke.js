@@ -366,6 +366,18 @@ require('../main.js').ready.then(async (win) => {
     } else {
       expect(await set({ mode: 'offline', offlineName: 'Tester_1' }) === 'FORBIDDEN', 'offline mode is selectable on a machine that is not the developer\'s');
     }
+    // Without Prism Launcher the Prism option is greyed out, with a note, and cannot be chosen.
+    const launcherMod = require('../src/launcher.js'), wasInstalled = launcherMod.prismInstalled;
+    launcherMod.prismInstalled = () => false;
+    try {
+      await set({ mode: 'account' });
+      expect(await set({ mode: 'prism' }) === 'NO_PRISM', 'the Prism setting could be chosen without Prism Launcher');
+      await js(`api('config.get').then((c) => { setConfig(c); go('settings'); })`);
+      await waitFor(`[...document.querySelectorAll('.settings option')].some(o => o.value === 'prism' && o.disabled) && /only available if Prism Launcher is installed/.test(document.querySelector('.settings').textContent)`, 'greyed-out Prism option');
+      await shot('14b-no-prism');
+    } finally {
+      launcherMod.prismInstalled = wasInstalled;
+    }
     expect(await set({ mode: 'nonsense' }) === 'OK' && await js(`api('config.get').then((c) => c.launchMode)`) === 'account', 'an unknown mode did not fall back to the default');
     await set({ mode: 'prism' });
     await js(`api('config.get').then((c) => { setConfig(c); go('browse'); })`);

@@ -41,6 +41,13 @@ function prismInstalls() {
 
 const canCreate = () => prismInstalls().length > 0;
 
+// Is Prism Launcher on this computer at all? Its data folder (it has been run), its
+// program, or its Flatpak counts.
+const prismInstalled = () => prismInstalls().length > 0
+  || Boolean(findProgram(WIN ? WIN_PROGRAMS.prism : ['prismlauncher']))
+  || (!WIN && isDir(path.join(HOME, '.var/app/org.prismlauncher.PrismLauncher')))
+  || (!WIN && ['/var/lib/flatpak/app/org.prismlauncher.PrismLauncher', path.join(DATA, 'flatpak/app/org.prismlauncher.PrismLauncher')].some(isDir));
+
 // How the instance at this game folder gets started, or null if Modion has no way to.
 //   play: true  -> the game itself can be launched
 //   play: false -> the best we can do is open the launcher that owns it
@@ -231,4 +238,4 @@ async function create({ name, gameVersion, loader, loaderVersion }) {
   }
 }
 
-module.exports = { canCreate, describe, launch, create, createOwn, rename, cleanName, prismRoots, loaderBuild, loaderMeta, gameMeta };
+module.exports = { prismInstalled, canCreate, describe, launch, create, createOwn, rename, cleanName, prismRoots, loaderBuild, loaderMeta, gameMeta };

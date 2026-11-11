@@ -131,6 +131,7 @@ function publicConfig() {
       count: list.filter((i) => i.managed && i.home && path.dirname(i.home) === dir).length,
     })),
     launchMode: store.config.launchMode,
+    prismInstalled: launcher.prismInstalled(), // the Prism setting is only offered when it is
     openLogOnLaunch: store.config.openLogOnLaunch,
     checkUpdates: store.config.checkUpdates && !HEADLESS, // the tests do not go looking for releases
     // Whether this copy can replace its own files; otherwise an update is a download from the release page.
@@ -432,6 +433,9 @@ const methods = {
   'settings.setLaunch': (a) => {
     const mode = oneOf(a.mode, ['prism', 'account', 'offline'], 'account');
     if (mode === 'offline' && !offlineAllowed) throw new ApiError('Offline launching is not available on this computer.', 'FORBIDDEN');
+    if (mode === 'prism' && store.config.launchMode !== 'prism' && !launcher.prismInstalled()) {
+      throw new ApiError('Starting through Prism Launcher is only available when Prism Launcher is installed.', 'NO_PRISM');
+    }
     const name = text(a.offlineName, 16);
     if (name && !PLAYER_NAME.test(name)) throw new ApiError('A player name is 3 to 16 letters, digits or underscores.', 'BAD_REQUEST');
     store.config.launchMode = mode;
