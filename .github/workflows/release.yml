@@ -67,6 +67,11 @@ jobs:
           dev/build-release.sh "${TAG#v}" dist
           echo "V=${TAG#v}" >> "$GITHUB_ENV"
 
+      - name: Build the Windows installer
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq nsis
+          makensis -V2 -DVERSION="$V" -DSRC="$PWD/dist/modion-$V-windows-x64" -DOUT="$PWD/dist/modion-$V-windows-x64-setup.exe" dev/installer.nsi
+
       - name: Create the release
         run: |
           printf '%s\n' "$NOTES" > notes.md
@@ -90,6 +95,6 @@ jobs:
           [ "$DRAFT" = "true" ] && args+=(--draft)
           [ "$PRERELEASE" = "true" ] && args+=(--prerelease)
           cd dist
-          assets=("modion-$V-linux-x64.tar.gz" "modion-$V-windows-x64.zip" "modion-$V-app.zip")
+          assets=("modion-$V-linux-x64.tar.gz" "modion-$V-windows-x64-setup.exe" "modion-$V-windows-x64.zip" "modion-$V-app.zip")
           sha256sum "${assets[@]}" > SHA256SUMS.txt
           gh release create "$TAG" "${assets[@]}" SHA256SUMS.txt "${args[@]}"

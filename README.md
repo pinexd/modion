@@ -29,8 +29,11 @@ from the unpacked folder.
 
 ### Windows
 
-Download `modion-<version>-windows-x64.zip` from a release, unpack it anywhere and run
-`Modion.exe`. Electron is included. Settings are kept in `%APPDATA%\Modion`, new
+Download `modion-<version>-windows-x64-setup.exe` from a release and run it. It installs
+for your user only (no administrator rights) into `%LOCALAPPDATA%\Programs\Modion`, adds
+Start menu and desktop shortcuts, and can be removed under "Installed apps". The installer
+is not code-signed, so Windows SmartScreen will ask before running it. There is also a
+portable `modion-<version>-windows-x64.zip`: unpack it anywhere and run `Modion.exe`. Settings are kept in `%APPDATA%\Modion`, new
 instances in `%APPDATA%\Modion\instances`, and downloaded game files in
 `%LOCALAPPDATA%\ModionApp`.
 
