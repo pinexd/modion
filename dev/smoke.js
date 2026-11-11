@@ -582,6 +582,75 @@ require('../main.js').ready.then(async (win) => {
     }
   });
 
+  await step('mods a pack had to leave out are listed and fetched one by one from the website', async () => {
+    const cf = require('../src/curseforge'), web = require('../src/webinstall'), { writeZip } = require('../src/zip'), { ApiError } = require('../src/http');
+    const real = { hasKey: cf.hasKey, getFiles: cf.getFiles, getVersion: cf.getVersion, brief: cf.brief, open: web.open };
+    const mod = (await require('../src/modrinth').versions('modmenu', { type: 'mod', gameVersion: '1.21.1', loader: 'fabric' }))[0];
+    const blockedFile = (id, name) => ({ id: String(id), projectId: String(id * 10), name, versionNumber: `${name}.jar`, file: null, expected: { filename: `${name}.jar`, size: 0 }, gameVersions: [], loaders: [], dependencies: [] });
+    const files = { 1: { id: '1', projectId: '10', name: 'Mod Menu', file: mod.file }, 2: blockedFile(2, 'blocked-a'), 3: blockedFile(3, 'blocked-b') };
+    cf.hasKey = () => true;
+    cf.getFiles = async (ids) => ids.map((i) => files[i]).filter(Boolean);
+    cf.getVersion = async (_p, v) => files[v];
+    cf.brief = async (p) => ({ title: `project ${p}`, url: `https://www.curseforge.com/minecraft/mc-mods/p${p}` });
+    const packFile = path.join(work, 'cf-pack.zip');
+    writeZip(packFile, [{ name: 'manifest.json', data: Buffer.from(JSON.stringify({
+      name: 'Left Out Pack', minecraft: { version: '1.21.1', modLoaders: [{ id: 'fabric-0.16.0', primary: true }] }, overrides: 'overrides',
+      files: [1, 2, 3].map((n) => ({ projectID: n * 10, fileID: n, required: true })) })) }]);
+    const opens = [];
+    let closeFirst = true;
+    web.open = async (o) => {
+      opens.push(o.url);
+      if (closeFirst) { closeFirst = false; throw new ApiError('closed', 'CANCELLED'); } // the person closes the first window
+      const tmp = path.join(o.destDir, `${o.expect.filename}.part`);
+      fs.mkdirSync(o.destDir, { recursive: true });
+      fs.writeFileSync(tmp, 'jar');
+      return { tmp, filename: o.expect.filename };
+    };
+    try {
+      await js(`go('instances')`);
+      nextPick = packFile;
+      await js(`[...document.querySelectorAll('#view .btn')].find(b => b.textContent === 'Import Modpack...').click()`);
+      await waitFor(`!document.querySelector('#overlay').hidden && document.querySelectorAll('#overlay .step').length === 2`, 'left-out list', 120000);
+      const inst = await js(`S.cfg.instances[S.cfg.instances.length - 1]`);
+      expect(inst.leftOut && inst.leftOut.length === 2 && fs.readdirSync(path.join(inst.path, 'mods')).length === 1, `left-out record: ${JSON.stringify(inst.leftOut)}`);
+      expect(await js(`[...document.querySelectorAll('#overlay .status')].every(x => x.classList.contains('pending'))`), 'the files do not start as pending');
+      await shot('22-left-out');
+      await js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === 'Install Them One by One').click()`);
+      // The first window is "closed": a second question appears over the list.
+      await waitFor(`document.querySelector('#overlay .sub-dialog') && !document.querySelector('#overlay .sub-dialog').hidden`, 'skip-or-reopen question');
+      expect(await js(`document.querySelector('#overlay .status').classList.contains('working')`), 'the mod in hand is not marked as in progress');
+      await shot('23-left-out-closed');
+      await js(`[...document.querySelectorAll('#overlay .sub-dialog .btn')].find(b => b.textContent === 'Re-open the Window').click()`);
+      await waitFor(`[...document.querySelectorAll('#overlay .status')].every(x => x.classList.contains('done'))`, 'both files installed');
+      expect(opens.length === 3 && opens[0] === opens[1] && /\/p20\/files\/2$/.test(opens[0]) && /\/p30\/files\/3$/.test(opens[2]), `pages opened: ${opens.join(' ')}`);
+      const mods = fs.readdirSync(path.join(inst.path, 'mods')).sort();
+      expect(mods.includes('blocked-a.jar') && mods.includes('blocked-b.jar') && mods.length === 3, `mods folder: ${mods.join()}`);
+      expect(!(await js(`S.cfg.instances.find(i => i.id === '${inst.id}').leftOut`)), 'installed files stayed on the left-out list');
+      await shot('24-left-out-done');
+      await js(`closeScreen()`);
+
+      // Skipping keeps the file on the list, and the instance row offers it again.
+      await js(`window.modion.call('instances.delete', { id: '${inst.id}' })`);
+      closeFirst = true;
+      nextPick = packFile;
+      await js(`api('config.get').then((c) => { setConfig(c); render(); })`);
+      await js(`[...document.querySelectorAll('#view .btn')].find(b => b.textContent === 'Import Modpack...').click()`);
+      await waitFor(`!document.querySelector('#overlay').hidden && document.querySelectorAll('#overlay .step').length === 2`, 'left-out list again', 120000);
+      await js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === 'Install Them One by One').click()`);
+      await waitFor(`document.querySelector('#overlay .sub-dialog') && !document.querySelector('#overlay .sub-dialog').hidden`, 'question again');
+      await js(`[...document.querySelectorAll('#overlay .sub-dialog .btn')].find(b => b.textContent === 'Skip This Mod').click()`);
+      await waitFor(`document.querySelectorAll('#overlay .status.skipped').length === 1 && document.querySelectorAll('#overlay .status.done').length === 1`, 'one skipped, one installed');
+      await js(`closeScreen()`);
+      await waitFor(`[...document.querySelectorAll('#view .btn')].some(b => b.textContent === 'Left Out (1)')`, 'reminder on the instance row');
+      const again = await js(`S.cfg.instances[S.cfg.instances.length - 1].id`);
+      await js(`window.modion.call('instances.delete', { id: '${again}' })`);
+      await js(`api('config.get').then((c) => { setConfig(c, { follow: true }); render(); })`);
+    } finally {
+      Object.assign(cf, { hasKey: real.hasKey, getFiles: real.getFiles, getVersion: real.getVersion, brief: real.brief });
+      web.open = real.open;
+    }
+  });
+
   await step('instance settings: Java, memory slider, arguments and environment', async () => {
     await js(`go('instances')`);
     const id = await js(`S.cfg.instances[0].id`);

@@ -514,6 +514,7 @@ async function doPackInstall(req) {
     for (const sk of left.slice(0, 4)) toast('Left out of the pack', `${sk.title}: ${sk.reason}`, { tone: 'gold', time: 12000 });
     if (left.length > 4) toast('Left out of the pack', `...and ${left.length - 4} more files.`, { tone: 'gold', time: 12000 });
     renderBottom();
+    if (r.leftOut) leftOutScreen(r.id);
   } catch (e) {
     // The author only offers this pack on the website: carry on there.
     if (e.code === 'BLOCKED' && e.detail && e.detail.versionId && !req.website) fromWebsite = { ...req, versionId: e.detail.versionId, website: true };
@@ -1293,6 +1294,95 @@ function renameInstance(i) {
   input.select();
 }
 
+// The files a modpack wanted but could not download itself, because their authors only
+// allow downloads from the CurseForge website. Shown after a pack is installed (and from
+// the Instances page later): Modion can go through them one by one, opening each file's
+// page for the person to press Download on, and marks each as it goes.
+function leftOutScreen(instId) {
+  const inst = S.cfg.instances.find((i) => i.id === instId);
+  const files = inst && Array.isArray(inst.leftOut) ? inst.leftOut : [];
+  if (!files.length) return;
+  const items = files.map((f) => ({ ...f, state: 'pending', note: '' }));
+  let running = false, stopped = false, open = true;
+  const NOTE = { pending: '', working: 'Waiting for you to press Download in the window...', done: 'Installed', skipped: 'Skipped', failed: 'Failed' };
+
+  const list = h('div', { class: 'list steps' });
+  const intro = h('p', {});
+  const buttons = h('div', { class: 'screen-buttons' });
+  const ask = h('div', { class: 'sub-dialog', hidden: true });
+  const draw = () => {
+    const left = items.filter((i) => i.state === 'pending' || i.state === 'working').length;
+    const done = items.filter((i) => i.state === 'done').length;
+    intro.textContent = !running && !done && left === items.length
+      ? `${items.length} file${items.length === 1 ? ' was' : 's were'} left out of "${inst.name}" because ${items.length === 1 ? 'its author only allows' : 'their authors only allow'} downloads from the CurseForge website. Modion can open each one's page in turn: you press Download there, and Modion puts the file in the instance.`
+      : running ? `Fetching the left-out files of "${inst.name}" one by one.`
+        : `${done} of ${items.length} installed${left ? `, ${left} still left out` : ''}.`;
+    fill(list, items.map((i) => h('div', { class: `row step ${i.state}` },
+      h('span', { class: `status ${i.state}`, title: i.state }),
+      h('div', { class: 'row-main' },
+        h('div', { class: 'row-title' }, i.title),
+        h('div', { class: 'faint row-title' }, [i.filename, i.note || NOTE[i.state]].filter(Boolean).join('  |  '))))));
+    const todo = items.some((i) => i.state === 'pending' || i.state === 'skipped' || i.state === 'failed');
+    fill(buttons,
+      running
+        ? btn('Stop After This One', () => { stopped = true; draw(); }, stopped ? 'small' : '')
+        : [btn(done || !todo ? 'Close' : 'Not Now', closeScreen),
+          todo && btn(items.some((i) => i.state !== 'pending') ? 'Go Through the Rest' : 'Install Them One by One', run, 'green')]);
+    if (running && stopped) buttons.firstChild.disabled = true;
+  };
+
+  // The download window was closed without the file: skip it, or open the window again?
+  const closedWithout = (item) => new Promise((resolve) => {
+    const answer = (v) => { ask.hidden = true; resolve(v); };
+    fill(ask, h('div', { class: 'sub-box' },
+      h('div', { class: 'modal-title' }, 'The window was closed'),
+      h('p', {}, `"${item.title}" was not downloaded.`),
+      h('div', { class: 'screen-buttons' }, btn('Skip This Mod', () => answer('skip')), btn('Re-open the Window', () => answer('retry'), 'green'))));
+    ask.hidden = false;
+    ask.querySelector('.green').focus();
+  });
+
+  async function run() {
+    if (running) return;
+    running = true;
+    stopped = false;
+    for (const item of items) {
+      if (item.state === 'done' || stopped || !open) continue;
+      for (;;) {
+        item.state = 'working';
+        item.note = '';
+        draw();
+        try {
+          const r = await api('install.viaWebsite', { instanceId: instId, projectId: item.projectId, versionId: item.fileId, type: item.type, title: item.title });
+          if (r && r.config) setConfig(r.config);
+          item.state = 'done';
+        } catch (e) {
+          if (e.code === 'CANCELLED' && open) {
+            draw();
+            if (await closedWithout(item) === 'retry') continue;
+            item.state = 'skipped';
+          } else {
+            item.state = e.code === 'CANCELLED' ? 'skipped' : 'failed';
+            item.note = e.code === 'CANCELLED' ? '' : e.message;
+          }
+        }
+        break;
+      }
+      draw();
+    }
+    running = false;
+    if (open) draw();
+  }
+
+  draw();
+  showScreen('Mods left out of the pack',
+    h('div', { class: 'screen-body' }, h('div', { class: 'confirm' }, intro), list, ask),
+    [], () => { open = false; stopped = true; render(); });
+  // This screen draws its own buttons, since they change as it goes.
+  const bar = $('#overlay .modal > .screen-buttons');
+  if (bar) bar.replaceWith(buttons);
+}
+
 // Per-instance settings for when Modion starts the game: which Java, how much memory,
 // extra Java arguments and environment variables.
 async function instanceSettings(i) {
@@ -1407,6 +1497,9 @@ function viewInstances(v) {
         const left = Array.isArray(r.skipped) ? r.skipped : [];
         for (const sk of left.slice(0, 4)) toast('Left out of the pack', `${sk.title}: ${sk.reason}`, { tone: 'gold', time: 12000 });
         if (left.length > 4) toast('Left out of the pack', `...and ${left.length - 4} more files.`, { tone: 'gold', time: 12000 });
+        redraw();
+        if (r.leftOut) leftOutScreen(r.id);
+        return;
       }
     } catch (e) { fail(e, 'Import failed'); }
     redraw();
@@ -1435,6 +1528,7 @@ function viewInstances(v) {
       h('div', { class: 'row-actions' },
         select,
         btn('Open Folder', () => api('instances.openFolder', { id: i.id }).catch(fail), 'small'),
+        Array.isArray(i.leftOut) && i.leftOut.length > 0 && btn(`Left Out (${i.leftOut.length})`, () => leftOutScreen(i.id), 'small gold-btn'),
         btn('Settings', () => instanceSettings(i), 'small'),
         i.managed && btn('Rename', () => renameInstance(i), 'small'),
         i.movable && move,

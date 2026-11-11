@@ -345,3 +345,25 @@ p.label.gold { color: var(--gold, #ffd75e); }
 .multi-menu .check { white-space: nowrap; }
 .multi-menu .btn { align-self: flex-start; margin-top: 4px; }
 .multi-note { font-size: 11px; padding-bottom: 2px; }
+
+/* ---------- step list with status marks (left-out pack files) ---------- */
+.steps .row.step { align-items: center; padding: 10px 24px; }
+.status { flex: none; width: 18px; height: 18px; border-radius: 50%; box-sizing: border-box; position: relative; }
+.status.pending { border: 2px solid #6e6e6e; }
+.status.working { border: 2px solid #5a4a1a; border-top-color: #ffb84d; animation: spin .9s linear infinite; }
+.status.done { background: #1bd96a; }
+.status.done::after { content: ''; position: absolute; left: 6px; top: 3px; width: 4px; height: 8px; border: solid #10301c; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.status.skipped { border: 2px solid #6e6e6e; }
+.status.skipped::after { content: ''; position: absolute; left: 2px; right: 2px; top: 6px; height: 2px; background: #6e6e6e; transform: rotate(-45deg); }
+.status.failed { background: #e5484d; }
+.status.failed::before, .status.failed::after { content: ''; position: absolute; left: 8px; top: 4px; width: 2px; height: 10px; background: #3a0f11; }
+.status.failed::before { transform: rotate(45deg); }
+.status.failed::after { transform: rotate(-45deg); }
+.row.step.skipped .row-title:first-child, .row.step.pending .row-title:first-child { color: #c9c9c9; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.modal { position: relative; }
+.sub-dialog { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .6); }
+.sub-dialog[hidden] { display: none; }
+.sub-box { width: min(440px, 90%); background: #313131; border: 1px solid #5a5a5a; box-shadow: 0 12px 32px rgba(0, 0, 0, .6); }
+.sub-box p { padding: 18px 24px; margin: 0; }
+.btn.gold-btn { border-color: #ffb84d; color: #ffd98a; }

@@ -66,8 +66,11 @@ function inspect(file) {
 }
 
 // The downloads a pack asks for, as items for the downloader, plus what had to be left out.
+// What to download for a pack: `items` to fetch, `skipped` files that cannot be had at all,
+// and `blocked` files whose authors only allow downloads from the CurseForge website (those
+// can still be fetched by hand, one page at a time).
 async function downloads(pack, gameDir, curseforge) {
-  const items = [], skipped = [];
+  const items = [], skipped = [], blocked = [];
   if (pack.kind === 'modrinth') {
     for (const f of pack.files) {
       if (!f || typeof f.path !== 'string') continue;
@@ -80,7 +83,7 @@ async function downloads(pack, gameDir, curseforge) {
       const hashes = f.hashes || {};
       items.push({ url, sha512: hashes.sha512, sha1: hashes.sha1, size: Number(f.fileSize) || 0, dir: path.dirname(full), filename: path.basename(full) });
     }
-    return { items, skipped };
+    return { items, skipped, blocked };
   }
 
   const wanted = pack.files.filter((f) => f && f.fileID && f.required !== false).map((f) => Number(f.fileID)).filter(Number.isInteger);
@@ -92,13 +95,17 @@ async function downloads(pack, gameDir, curseforge) {
   for (const id of wanted) {
     const v = found.get(id);
     if (!v) { skipped.push({ title: `File ${id}`, reason: 'CurseForge no longer has it' }); continue; }
-    if (!v.file) { skipped.push({ title: v.name, reason: 'its author only allows downloads from the CurseForge website' }); continue; }
     // The manifest does not say what kind of file each one is; jars are mods, zips are resource packs.
+    if (!v.file) {
+      const filename = (v.expected && v.expected.filename) || '';
+      blocked.push({ projectId: String(v.projectId), fileId: String(v.id), title: v.name, filename, type: /\.zip$/i.test(filename) ? 'resourcepack' : 'mod' });
+      continue;
+    }
     const folder = /\.jar$/i.test(v.file.filename) ? 'mods' : 'resourcepacks';
     const full = inside(gameDir, path.join(folder, path.basename(v.file.filename)));
     items.push({ ...v.file, dir: path.dirname(full), filename: path.basename(full) });
   }
-  return { items, skipped };
+  return { items, skipped, blocked };
 }
 
 // Copies the pack's bundled files (configs, resource packs, ...) into the game folder.

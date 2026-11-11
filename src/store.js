@@ -27,6 +27,10 @@ class Store {
           // Set on instances Modion created or imported: `home` is the folder it may rename and delete.
           ...(i.managed === true && typeof i.home === 'string' && i.home ? { managed: true, home: i.home } : {}),
           // How Modion starts this instance's game, where the person changed it from the defaults.
+          // Files a modpack wanted that can only be downloaded from the CurseForge website.
+          ...(Array.isArray(i.leftOut) && i.leftOut.length ? { leftOut: i.leftOut
+            .filter((f) => isObject(f) && typeof f.projectId === 'string' && typeof f.fileId === 'string')
+            .map((f) => ({ projectId: f.projectId, fileId: f.fileId, title: String(f.title || f.filename || 'Unnamed file'), filename: String(f.filename || ''), type: f.type === 'resourcepack' ? 'resourcepack' : 'mod' })) } : {}),
           ...(isObject(i.settings) ? { settings: {
             memory: Number.isInteger(i.settings.memory) && i.settings.memory > 0 ? i.settings.memory : null, // MB; null = automatic
             jvmArgs: typeof i.settings.jvmArgs === 'string' ? i.settings.jvmArgs : '',

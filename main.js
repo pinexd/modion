@@ -302,11 +302,13 @@ async function importPack(file, fallbackName) {
       throw new ApiError('Importing a CurseForge modpack needs your CurseForge API key. Add it in Settings first.', 'NO_CF_KEY');
     }
     made = await makeInstance(spec);
-    const { items, skipped } = await modpack.downloads(pack, made.path, curseforge);
+    const { items, skipped, blocked } = await modpack.downloads(pack, made.path, curseforge);
     await game.fetchAll(items, (received, total) => emit({ ...job, state: 'progress', received, total }));
     const copied = await modpack.unpackOverrides(pack, made.path);
     const inst = adopt(made, spec);
-    return { config: publicConfig(), name: inst.name, files: items.length, copied, skipped };
+    // Remembered with the instance, so they can be fetched from the website now or later.
+    if (blocked.length) { inst.leftOut = blocked; store.saveConfig(); }
+    return { config: publicConfig(), id: inst.id, name: inst.name, files: items.length, copied, skipped, leftOut: blocked.length };
   } catch (e) {
     if (made) fs.rmSync(made.home, { recursive: true, force: true }); // only the folder created just above
     throw e;
@@ -464,7 +466,10 @@ const methods = {
   // For a file its author only offers on the website: show that page and wait for the
   // person to download the file there.
   'install.viaWebsite': async (a) => {
-    const inst = content.activeInstance(store);
+    // Normally the selected instance; the left-out files of a pack name theirs.
+    const inst = a.instanceId ? store.instance(a.instanceId) : content.activeInstance(store);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    if (!instances.isDir(inst.path)) throw new ApiError(`The folder for "${inst.name}" no longer exists: ${inst.path}`, 'NO_FOLDER');
     const type = contentType(a.type);
     const projectId = id(a.projectId, 'project');
     const v = await curseforge.getVersion(projectId, id(a.versionId, 'file'));
@@ -489,8 +494,23 @@ const methods = {
       emit({ ...job, state: 'error', error: e.message });
       throw e;
     }
+    // One fewer on the instance's list of left-out files, if it was one of those.
+    if (inst.leftOut) {
+      inst.leftOut = inst.leftOut.filter((f) => f.fileId !== String(v.id));
+      if (!inst.leftOut.length) delete inst.leftOut;
+      store.saveConfig();
+    }
     refreshInstalled();
-    return { installed_ids: content.installedIds(store) };
+    return { installed_ids: content.installedIds(store), config: publicConfig() };
+  },
+
+  // Drops an instance's list of left-out files (the person does not want them).
+  'instances.clearLeftOut': (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    delete inst.leftOut;
+    store.saveConfig();
+    return publicConfig();
   },
 
   // For a modpack its author only offers on the website: show that file's page, wait for
