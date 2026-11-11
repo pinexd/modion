@@ -535,6 +535,41 @@ require('../main.js').ready.then(async (win) => {
     await waitFor(`S.cfg.instances.length === ${before.n}`, 'cleanup');
   });
 
+  await step('a website-only modpack goes through the CurseForge page and becomes an instance', async () => {
+    const cf = require('../src/curseforge'), web = require('../src/webinstall');
+    const real = { latest: cf.latest, getVersion: cf.getVersion, brief: cf.brief, open: web.open };
+    const blocked = { id: '77', name: 'Blocked Pack', file: null, expected: { filename: 'blocked-pack.zip', size: 0 } };
+    let opened = null;
+    cf.latest = async () => blocked;
+    cf.getVersion = async () => blocked;
+    cf.brief = async () => ({ title: 'Blocked Pack', url: 'https://www.curseforge.com/minecraft/modpacks/blocked-pack/' });
+    web.open = async (o) => {
+      opened = o;
+      const tmp = path.join(o.destDir, 'blocked-pack.zip.part');
+      fs.copyFileSync(path.join(work, 'good.mrpack'), tmp); // stands in for the file the person downloads
+      return { tmp, filename: 'blocked-pack.zip' };
+    };
+    try {
+      const n = await js(`S.cfg.instances.length`);
+      await js(`doPackInstall({ source: 'curseforge', projectId: '5', type: 'modpack', title: 'Blocked Pack' })`);
+      await waitFor(`S.cfg.instances.length === ${n + 1} && !busy.size`, 'instance from the website download', 120000);
+      expect(opened && opened.url === 'https://www.curseforge.com/minecraft/modpacks/blocked-pack/files/77' && opened.expect.filename === 'blocked-pack.zip'
+        && opened.siteHosts.join() === 'curseforge.com', `website window: ${JSON.stringify(opened && { url: opened.url, hosts: opened.siteHosts })}`);
+      const made = await js(`S.cfg.instances[S.cfg.instances.length - 1]`);
+      expect(fs.readdirSync(path.join(made.path, 'mods')).length === 1 && !fs.existsSync(opened.destDir), 'the pack was not unpacked, or its download was left behind');
+      // Closing the window without downloading is not an error to shout about.
+      web.open = async () => { throw Object.assign(new (require('../src/http').ApiError)('closed', 'CANCELLED')); };
+      await js(`doPackInstall({ source: 'curseforge', projectId: '5', type: 'modpack', title: 'Blocked Pack' })`);
+      await waitFor(`!busy.size`, 'cancelled install to settle');
+      expect(await js(`S.cfg.instances.length`) === n + 1 && !(await js(`[...document.querySelectorAll('#toasts .toast')].some(t => /not installed/i.test(t.textContent))`)), 'a cancelled website download was reported as a failure');
+      await js(`window.modion.call('instances.delete', { id: '${made.id}' })`);
+      await js(`api('config.get').then((c) => setConfig(c, { follow: true }))`);
+    } finally {
+      Object.assign(cf, { latest: real.latest, getVersion: real.getVersion, brief: real.brief });
+      web.open = real.open;
+    }
+  });
+
   await step('instance settings: Java, memory slider, arguments and environment', async () => {
     await js(`go('instances')`);
     const id = await js(`S.cfg.instances[0].id`);

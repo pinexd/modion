@@ -489,6 +489,38 @@ const methods = {
     return { installed_ids: content.installedIds(store) };
   },
 
+  // For a modpack its author only offers on the website: show that file's page, wait for
+  // the person to download the pack there, then make the instance from it.
+  'modpack.installViaWebsite': async (a) => {
+    const projectId = id(a.projectId, 'project');
+    const v = await curseforge.getVersion(projectId, id(a.versionId, 'file'));
+    if (!v.expected) throw new ApiError('CurseForge did not say which file this is.', 'BAD_REPLY');
+    const page = (await curseforge.brief(projectId)).url;
+    if (!page) throw new ApiError('CurseForge did not give a page for this project.', 'BAD_REPLY');
+    const dir = await fs.promises.mkdtemp(path.join(require('os').tmpdir(), 'modion-pack-'));
+    const job = { id: crypto.randomUUID(), title: text(a.title, 200) || v.name, filename: v.expected.filename };
+    try {
+      let got;
+      try {
+        got = await webinstall.open({
+          parent: liveWindow(),
+          url: `${page.replace(/\/+$/, '')}/files/${encodeURIComponent(v.id)}`,
+          title: `Download ${v.expected.filename} from CurseForge`,
+          siteHosts: ['curseforge.com'],
+          downloadHosts: ['forgecdn.net', 'curseforge.com'],
+          expect: v.expected,
+          destDir: dir,
+          onProgress: (received, total) => emit({ ...job, state: 'progress', received, total }),
+        });
+      } finally {
+        emit({ ...job, state: 'done', saved: true });
+      }
+      return await importPack(got.tmp, text(a.title, 80));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true }); // only the temporary folder made just above
+    }
+  },
+
   search: (a) => source(a.source).search({
     ...filter(a),
     query: text(a.query, 200),
@@ -585,7 +617,8 @@ const methods = {
       : await src.latest(projectId, { type: 'modpack', gameVersion: text(a.gameVersion, 32), loader: oneOf(a.loader, LOADERS, '') });
     if (!v) throw new ApiError('This modpack has no file for the chosen game version and loader.', 'NO_VERSION');
     if (!v.file) {
-      throw new ApiError('The author only offers this modpack on the website. Download it there, then use "Import Modpack..." on the Instances page.', 'BLOCKED');
+      // The page carries on with the website download, the same way as for a single mod.
+      throw new ApiError('The author only offers this modpack on the website.', 'BLOCKED', undefined, { versionId: v.id });
     }
     const dir = await fs.promises.mkdtemp(path.join(require('os').tmpdir(), 'modion-pack-'));
     const job = { id: crypto.randomUUID(), title: text(a.title, 200) || v.name, filename: v.file.filename };

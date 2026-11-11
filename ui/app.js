@@ -503,8 +503,10 @@ async function doPackInstall(req) {
   if (busy.has(key)) return;
   busy.add(key);
   paintInstalls();
+  let fromWebsite = null;
   try {
-    const r = await api('modpack.install', req);
+    const r = await api(req.website ? 'modpack.installViaWebsite' : 'modpack.install', req);
+    if (!r) return; // (nothing to report)
     setConfig(r.config, { follow: true });
     toast('Modpack installed', `${r.name} is a new instance with ${r.files} file${r.files === 1 ? '' : 's'}. It is now selected.`, { time: 9000 });
     const left = Array.isArray(r.skipped) ? r.skipped : [];
@@ -512,10 +514,16 @@ async function doPackInstall(req) {
     if (left.length > 4) toast('Left out of the pack', `...and ${left.length - 4} more files.`, { tone: 'gold', time: 12000 });
     renderBottom();
   } catch (e) {
-    fail(e, 'Modpack not installed');
+    // The author only offers this pack on the website: carry on there.
+    if (e.code === 'BLOCKED' && e.detail && e.detail.versionId && !req.website) fromWebsite = { ...req, versionId: e.detail.versionId, website: true };
+    else if (e.code !== 'CANCELLED') fail(e, 'Modpack not installed');
   } finally {
     busy.delete(key);
     paintInstalls();
+  }
+  if (fromWebsite) {
+    toast('Download it on the website', 'This modpack is only offered on CurseForge. Press Download in the window that opens and Modion will make the instance from it.', { time: 10000 });
+    doPackInstall(fromWebsite);
   }
 }
 
@@ -753,11 +761,11 @@ function versionRow(d, v) {
     }, 'small');
     actions = [install, save];
   } else if (pack) {
-    // A pack the author keeps to the website: download it there and import the file.
-    actions = [btn('Open Website', () => {
-      toast('Only on the website', 'Download the pack there, then use "Import Modpack..." on the Instances page.', { time: 10000 });
-      api('openExternal', { url: d.url }).catch(fail);
-    }, 'small')];
+    // A pack the author keeps to the website: its page opens, and the download made there is used.
+    actions = [installButton(req, 'small', { label: 'Get from Website', run: (r) => {
+      toast('Download it on the website', 'This modpack is only offered on CurseForge. Press Download in the window that opens and Modion will make the instance from it.', { time: 10000 });
+      doPackInstall({ ...r, website: true });
+    } })];
   } else {
     actions = [installButton(req, 'small', { label: 'Get from Website', run: doWebInstall })];
   }
