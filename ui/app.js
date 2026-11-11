@@ -308,6 +308,13 @@ window.modion.onInstalled((ids) => {
   paintInstalls();
 });
 
+// A game Modion started opened or closed.
+window.modion.onRunning((ids) => {
+  if (!Array.isArray(ids)) return;
+  S.cfg.running = ids;
+  renderBottom();
+});
+
 window.modion.onDownload((d) => {
   if (!d || !d.id) return;
   if (d.state === 'progress') jobs.set(d.id, d);
@@ -472,6 +479,21 @@ function renderBottom() {
     }, 'green play');
     action = h('div', { class: 'action' }, signIn,
       h('div', { class: 'faint small' }, signingIn ? 'Finish signing in in your web browser' : inst.launch.label));
+  } else if (inst && (S.cfg.running || []).includes(inst.id)) {
+    // Its game is open: Play rests, and the red button beside it ends the game.
+    const playing = btn('Playing', null, 'green play playing');
+    playing.disabled = true;
+    const stop = h('button', { class: 'stop', title: `Stop ${inst.name}`, ariaLabel: `Stop ${inst.name}`, onclick: async () => {
+      stop.disabled = true;
+      try {
+        await api('instances.stop', { id: inst.id });
+      } catch (e) {
+        if (e.code !== 'NOT_RUNNING') fail(e, 'Could not stop the game');
+        stop.disabled = false;
+      }
+    } });
+    action = h('div', { class: 'action' }, h('div', { class: 'play-wrap' }, playing, stop),
+      h('div', { class: 'faint small' }, inst.launch ? `via ${inst.launch.label}` : 'The game is open'));
   } else if (inst && inst.launch) {
     // Outside a project page the middle of the bar is the launcher's Play button.
     const label = inst.launch.play ? 'Play' : 'Open Launcher';

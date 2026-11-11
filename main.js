@@ -134,6 +134,13 @@ function howToLaunch(inst) {
   return how ? { direct: null, play: how.play, label: how.label } : null;
 }
 
+const runningIds = () => store.config.instances.filter((i) => game.isLive(i.path)).map((i) => i.id);
+// A game opened or closed: the Play button of its instance changes.
+game.onChange(() => {
+  const w = liveWindow();
+  if (store && w && !w.webContents.isDestroyed()) w.webContents.send('running', runningIds());
+});
+
 function publicConfig() {
   const { instances: list, activeInstanceId } = store.config;
   return {
@@ -162,6 +169,7 @@ function publicConfig() {
     msClientId: store.config.msClientId,
     account: account.status(),
     activeInstanceId,
+    running: runningIds(), // instances whose game Modion started and is still open
     hasCurseforgeKey: curseforge.hasKey(),
     ownCurseforgeKey: Boolean(store.config.curseforgeKey), // false while the key that came with Modion is in use
     installed: content.installedIds(store),
@@ -922,6 +930,14 @@ const methods = {
       return { label: 'Modion', play: true };
     }
     return launcher.launch(inst.path);
+  },
+
+  // Ends a game Modion started itself. Unsaved progress in the game is lost.
+  'instances.stop': (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    if (!game.stop(inst.path)) throw new ApiError(`"${inst.name}" is not running.`, 'NOT_RUNNING');
+    return true;
   },
 
   'instances.update': (a) => {

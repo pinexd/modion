@@ -79,6 +79,8 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
   "Starting the game" choice between Prism Launcher and starting directly. An offline mode exists for
   developing the launch code; it is locked to the developer's own computer and does not
   appear anywhere else.
+- **Stopping the game** – while a game Modion started is open, the Play button reads
+  "Playing" and a red button beside it ends the game at once (unsaved progress is lost).
 - **Instance libraries** – with either "start directly" setting, new instances are made in
   Modion's own folder (`~/.local/share/Modion` unless Settings names another) instead of in
   Prism. Settings lists these folders: add one, choose which receives new instances,

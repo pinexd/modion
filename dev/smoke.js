@@ -26,6 +26,7 @@ process.env.XDG_DATA_HOME = path.join(work, 'data');
 // A pretend Prism Launcher: new instances are written here, and "launching" only records the command.
 process.env.MODION_PRISM_ROOT = path.join(work, 'prism');
 fs.mkdirSync(path.join(work, 'prism', 'instances'), { recursive: true });
+const realSpawn = require('child_process').spawn;
 const spawned = [];
 require('child_process').spawn = (cmd, args) => {
   spawned.push([cmd, ...args]);
@@ -495,6 +496,28 @@ require('../main.js').ready.then(async (win) => {
       const two = await call('instances.create', { name: 'Own Two', gameVersion: '1.21.1', loader: '' });
       expect(two.ok && fs.existsSync(path.join(third, 'Own Two', 'minecraft')), 'a new instance did not go to the chosen folder');
       const twoInst = two.data.instances[two.data.instances.length - 1];
+
+      // A running game: Play rests as "Playing", and the red button beside it ends the game.
+      const gameMod = require('../src/game.js'), realLaunch = gameMod.launch;
+      let pretend;
+      gameMod.launch = async (i) => { pretend = realSpawn('sleep', ['300'], { detached: true, stdio: 'ignore' }); gameMod.track(i.path, pretend); return { label: 'Modion', play: true }; };
+      try {
+        await call('instances.setActive', { id: twoInst.id });
+        await js(`api('config.get').then((c) => { setConfig(c); go('browse'); })`);
+        await waitFor(`document.querySelector('#bottom .btn.play') && document.querySelector('#bottom .btn.play').textContent === 'Play'`, 'Play button');
+        await js(`document.querySelector('#bottom .btn.play').click()`);
+        await waitFor(`document.querySelector('#bottom .btn.playing:disabled') && document.querySelector('#bottom .btn.playing').textContent === 'Playing' && document.querySelector('#bottom .stop')`, 'Playing state with a stop button');
+        expect((await call('instances.move', { id: twoInst.id })).code === 'BUSY', 'a running instance could be moved');
+        await shot('15b-playing');
+        await js(`document.querySelector('#bottom .stop').click()`);
+        await waitFor(`!document.querySelector('#bottom .stop') && document.querySelector('#bottom .btn.play').textContent === 'Play'`, 'Play button back after stopping');
+        expect(pretend.exitCode !== null || pretend.signalCode !== null, 'the game process was not ended');
+        expect((await call('instances.stop', { id: twoInst.id })).code === 'NOT_RUNNING', 'stopping a closed game did not say so');
+        await js(`go('browse')`);
+      } finally {
+        gameMod.launch = realLaunch;
+        if (pretend) try { process.kill(-pretend.pid, 'SIGKILL'); } catch {}
+      }
 
       // Move a single instance; a name clash is refused and nothing moves.
       nextPick = second;

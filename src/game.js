@@ -550,9 +550,43 @@ function launchArgs({ game, profile, classpath, natives, gameAssets, logging, jv
 const outputLog = (gameDir) => path.join(ROOT, 'logs', `${crypto.createHash('sha1').update(gameDir).digest('hex').slice(0, 12)}.log`);
 
 const running = new Set(); // instance paths being prepared or just started
-const live = new Set();    // instance paths whose game, started from here, is still open
+const live = new Map();    // instance path -> the process of its game, started from here and still open
 // Is the game for this folder being started or running (as far as this session knows)?
 const inUse = (gameDir) => running.has(gameDir) || live.has(gameDir);
+const isLive = (gameDir) => live.has(gameDir);
+let changed = () => {};
+// Calls back whenever a game started from here opens or closes.
+const onChange = (cb) => { changed = cb; };
+
+// Remembers a started game until its process ends.
+function track(gameDir, child) {
+  live.set(gameDir, child);
+  changed();
+  child.once('exit', () => {
+    if (live.get(gameDir) !== child) return;
+    live.delete(gameDir);
+    changed();
+  });
+}
+
+// Ends a game process and whatever it started (the game runs as the head of its own process group).
+function kill(child, sig) {
+  if (process.platform === 'win32') {
+    require('child_process').execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
+    return;
+  }
+  try { process.kill(-child.pid, sig); } catch { try { child.kill(sig); } catch {} }
+}
+
+// Stops the game of this folder: asks first, and insists a few seconds later if it is still there.
+function stop(gameDir) {
+  const child = live.get(gameDir);
+  if (!child) return false;
+  kill(child, 'SIGTERM');
+  const timer = setTimeout(() => { if (live.get(gameDir) === child) kill(child, 'SIGKILL'); }, 4000);
+  if (timer.unref) timer.unref();
+  return true;
+}
 
 // "-Xmx2G -Dname="two words"" -> ['-Xmx2G', '-Dname=two words']
 function splitArgs(line) {
@@ -590,6 +624,7 @@ function wantedJava(gameVersion) {
 // for a few seconds; a crash on startup is reported with the end of its log.
 async function launch(inst, session, emit) {
   if (!supports(inst)) throw new ApiError('Modion cannot start this instance directly.', 'UNSUPPORTED');
+  if (live.has(inst.path)) throw new ApiError(`"${inst.name}" is already running.`, 'BUSY');
   if (running.has(inst.path)) throw new ApiError(`"${inst.name}" is already being started.`, 'BUSY');
   running.add(inst.path);
   const job = { id: crypto.randomUUID(), title: inst.name, filename: `Minecraft ${inst.gameVersion}`, saved: true };
@@ -628,8 +663,7 @@ async function launch(inst, session, emit) {
       throw new ApiError(`Minecraft stopped right after starting (${outcome.error || `exit ${outcome.code ?? outcome.signal}`}). ${tail}`.trim(), 'CRASHED');
     }
     child.unref();
-    live.add(inst.path);
-    child.once('exit', () => live.delete(inst.path));
+    track(inst.path, child);
     return { label: 'Modion', play: true, pid: child.pid, log: logFile };
   } finally {
     running.delete(inst.path);
@@ -644,4 +678,4 @@ function offlineSession(name) {
   return { name, uuid: h.toString('hex'), token: '0', offline: true };
 }
 
-module.exports = { splitArgs, parseEnv, setsMemory, defaultMemory, wantedJava, supports, launch, inUse, outputLog, offlineSession, fetchAll, versionJson, ROOT };
+module.exports = { splitArgs, parseEnv, setsMemory, defaultMemory, wantedJava, supports, launch, inUse, isLive, onChange, track, stop, outputLog, offlineSession, fetchAll, versionJson, ROOT };
