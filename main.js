@@ -529,7 +529,7 @@ const methods = {
     ...filter(a),
     query: text(a.query, 200),
     sort: oneOf(a.sort, SORTS, 'relevance'),
-    category: text(a.category, 60),
+    categories: (Array.isArray(a.categories) ? a.categories : []).map((c) => text(c, 60)).filter(Boolean).slice(0, 10),
     page: Math.min(Math.max(Math.floor(Number(a.page)) || 0, 0), 100000),
   }),
   project: (a) => source(a.source).project(id(a.id, 'project')),

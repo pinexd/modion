@@ -642,13 +642,28 @@ require('../main.js').ready.then(async (win) => {
 
   await step('category filter, filter-mismatch warning, and back/forward buttons', async () => {
     await js(`go('browse')`);
-    await waitFor(`S.browse.results && document.querySelectorAll('#view .bar select')[0].options.length > 8`, 'category menu');
+    await waitFor(`S.browse.results && document.querySelectorAll('#view .multi-menu .check').length > 8`, 'category menu');
     const all = await js(`S.browse.results.total`);
-    await js(`(() => { const m = document.querySelectorAll('#view .bar select')[0]; m.value = 'optimization'; m.dispatchEvent(new Event('change')); })()`);
-    await waitFor(`S.browse.results && S.browse.category === 'optimization'`, 'filtered results');
-    expect(await js(`S.browse.results.total`) < all, 'the category did not narrow the results');
+    const tick = (name) => js(`[...document.querySelectorAll('#view .multi-menu .check')].find(l => l.textContent === '${name}').querySelector('input').click()`);
+    await js(`document.querySelector('#view .multi-face').click()`);
+    await tick('Optimization');
+    await waitFor(`S.browse.results && S.browse.categories.join() === 'optimization'`, 'filtered results');
+    const one = await js(`S.browse.results.total`);
+    expect(one < all, 'the category did not narrow the results');
+    // A second category narrows further: results have to be in both. The menu stays open meanwhile.
+    expect(!(await js(`document.querySelector('#view .multi-menu').hidden`)), 'the menu closed after one tick');
+    await tick('Utility');
+    await waitFor(`S.browse.results && S.browse.categories.join() === 'optimization,utility'`, 'results for two categories');
+    const two = await js(`S.browse.results.total`);
+    expect(two > 0 && two < one, `two categories gave ${two} results, one gave ${one}`);
+    expect(await js(`document.querySelector('#view .multi-face').textContent`) === 'Optimization, Utility', 'the menu does not show what is ticked');
+    await shot('21-categories');
+    await tick('Utility');
+    await waitFor(`S.browse.results && S.browse.categories.join() === 'optimization' && S.browse.results.total === ${one}`, 'back to one category');
+    await js(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+    expect(await js(`document.querySelector('#view .multi-menu').hidden`), 'clicking elsewhere did not close the menu');
     expect(!(await js(`Boolean(document.querySelector('.warn'))`)), 'warning shown while the filters match the instance');
-    await js(`(() => { const m = document.querySelectorAll('#view .bar select')[2]; m.value = 'forge'; m.dispatchEvent(new Event('change')); })()`);
+    await js(`(() => { const m = document.querySelectorAll('#view .bar select')[1]; m.value = 'forge'; m.dispatchEvent(new Event('change')); })()`);
     await waitFor(`document.querySelector('.warn')`, 'mismatch warning');
     await shot('17-filters');
     await js(`document.querySelector('.warn .btn').click()`);
@@ -663,7 +678,7 @@ require('../main.js').ready.then(async (win) => {
     await side(3);
     expect(await js(`S.view === 'project' && S.project.hit.id`) === project, 'back did not return to the project page');
     await side(3);
-    expect(await js(`S.view`) === 'browse' && await js(`S.browse.category`) === 'optimization', 'back did not return to the search as it was');
+    expect(await js(`S.view`) === 'browse' && await js(`S.browse.categories.join()`) === 'optimization', 'back did not return to the search as it was');
     await side(4); await side(4);
     expect(await js(`S.view`) === 'settings', 'forward did not retrace the steps');
     await side(4);
@@ -671,7 +686,7 @@ require('../main.js').ready.then(async (win) => {
     await js(`go('library')`);
     await side(3); await side(4);
     expect(await js(`S.view`) === 'library', 'a new place did not replace the forward history');
-    await js(`invalidateResults({ category: '' }); go('browse')`);
+    await js(`invalidateResults({ categories: [] }); go('browse')`);
   });
 
   await step('files are matched across both sites, and a website download is captured', async () => {

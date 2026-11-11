@@ -100,14 +100,16 @@ function normFile(f) {
   };
 }
 
-async function search({ type = 'mod', query = '', gameVersion, loader, category, sort = 'relevance', page = 0 }) {
+async function search({ type = 'mod', query = '', gameVersion, loader, categories = [], sort = 'relevance', page = 0 }) {
+  const ids = arr(categories).filter((c) => /^\d+$/.test(c)).slice(0, 10); // the API takes at most ten
   const index = page * PAGE;
   if (index + PAGE > MAX_INDEX) throw new ApiError('CurseForge only serves the first 10,000 results. Narrow the search instead.', 'RANGE');
   const res = await cf('/mods/search', {
     gameId: GAME,
     classId: CLASS[type] || CLASS.mod,
     searchFilter: query,
-    categoryId: /^\d+$/.test(category || '') ? category : undefined,
+    categoryId: ids.length === 1 ? ids[0] : undefined,
+    categoryIds: ids.length > 1 ? `[${ids.join(',')}]` : undefined,
     gameVersion,
     modLoaderType: hasLoader(type) && loader ? LOADER[loader] : undefined,
     sortField: SORT[sort] || (query ? undefined : 2),

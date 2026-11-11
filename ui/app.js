@@ -99,7 +99,7 @@ const S = {
   cfg: { instances: [], activeInstanceId: null, hasCurseforgeKey: false, installed: {}, version: '' },
   gameVersions: [],
   view: 'browse',
-  browse: { source: 'modrinth', type: 'mod', query: '', gameVersion: '', loader: '', category: '', sort: 'relevance', page: 0, results: null, scroll: 0 },
+  browse: { source: 'modrinth', type: 'mod', query: '', gameVersion: '', loader: '', categories: [], sort: 'relevance', page: 0, results: null, scroll: 0 },
   project: null,
   library: { type: 'mod' },
 };
@@ -120,10 +120,10 @@ function invalidateResults(patch) {
 // selected instance says nothing about which packs fit: the version and loader filters
 // start out open there, and go back to the instance's when leaving.
 function browseType(type) {
-  if (type === 'modpack') invalidateResults({ type, category: '', gameVersion: '', loader: '' });
+  if (type === 'modpack') invalidateResults({ type, categories: [], gameVersion: '', loader: '' });
   else {
     const was = S.browse.type;
-    invalidateResults({ type, category: '' });
+    invalidateResults({ type, categories: [] });
     if (was === 'modpack') followInstance();
   }
 }
@@ -312,7 +312,7 @@ function renderRail() {
     h('div', { class: 'nav-label' }, 'Browse'),
     ...Object.entries(SOURCES).map(([id, name]) =>
       item(P ? P.from === 'browse' && P.hit.source === id : S.view === 'browse' && S.browse.source === id, id, name, () => {
-        if (S.browse.source !== id) invalidateResults({ source: id, category: '' }); // each site has its own categories
+        if (S.browse.source !== id) invalidateResults({ source: id, categories: [] }); // each site has its own categories
         go('browse');
       })),
     h('div', { class: 'nav-label' }, 'Installed'),
@@ -428,7 +428,7 @@ function navMove(step) {
   nav.at += step;
   nav.moving = true;
   try {
-    if (to.source !== S.browse.source) invalidateResults({ source: to.source, category: '' });
+    if (to.source !== S.browse.source) invalidateResults({ source: to.source, categories: [] });
     if (to.btype !== S.browse.type) browseType(to.btype);
     S.library.type = to.ltype;
     if (to.project) S.project = to.project;
@@ -619,8 +619,8 @@ async function loadResults() {
   fill(pager);
   let res = null, error = null;
   try {
-    const { source, type, query, gameVersion, loader, category, sort, page } = b;
-    res = await api('search', { source, type, query, gameVersion, loader, category, sort, page });
+    const { source, type, query, gameVersion, loader, categories, sort, page } = b;
+    res = await api('search', { source, type, query, gameVersion, loader, categories, sort, page });
   } catch (e) {
     error = e;
   }
@@ -663,6 +663,49 @@ function drawResults() {
 
 const categoryLists = new Map(); // "source:type" -> [{ id, label }]
 
+// A menu in which several categories can be ticked at once. Results have to be in all of
+// the ticked ones. `options()` gives [{ id, label }]; `onchange` gets the list of ticked IDs.
+function categoryMenu(options, chosen, onchange) {
+  let picked = [...chosen];
+  const face = h('button', { class: 'field multi-face', type: 'button' });
+  const menu = h('div', { class: 'multi-menu', hidden: true });
+  const box = h('div', { class: 'multi' }, face, menu);
+  const label = () => {
+    const names = picked.map((id) => (options().find((c) => c.id === id) || {}).label).filter(Boolean);
+    return !picked.length ? 'Any category' : names.length === 1 ? names[0] : names.length === 2 ? names.join(', ') : `${picked.length} categories`;
+  };
+  const draw = () => {
+    face.textContent = label();
+    face.classList.toggle('on', picked.length > 0);
+    const list = options();
+    fill(menu,
+      !list.length && h('div', { class: 'faint multi-note' }, 'No categories to choose from.'),
+      list.length > 0 && h('div', { class: 'faint multi-note' }, 'Results are in every category you tick.'),
+      list.map((c) => check(c.label, picked.includes(c.id), (on) => {
+        picked = on ? [...picked, c.id] : picked.filter((id) => id !== c.id);
+        face.textContent = label();
+        face.classList.toggle('on', picked.length > 0);
+        clear.disabled = !picked.length;
+        onchange([...picked]);
+      })),
+      clear);
+    clear.disabled = !picked.length;
+  };
+  const clear = btn('Clear', () => { picked = []; draw(); onchange([]); }, 'small');
+  const close = () => { menu.hidden = true; document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', escape, true); };
+  const outside = (e) => { if (!box.contains(e.target)) close(); };
+  const escape = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  face.addEventListener('click', () => {
+    if (!menu.hidden) { close(); return; }
+    menu.hidden = false;
+    document.addEventListener('mousedown', outside, true);
+    document.addEventListener('keydown', escape, true);
+  });
+  box.refresh = draw;
+  draw();
+  return box;
+}
+
 // The search box updates the query at once and searches a moment after typing stops.
 let searchTimer = null;
 
@@ -686,14 +729,16 @@ function viewBrowse(v) {
   });
   // Categories differ per site and content type; the menu fills in once they have loaded.
   const catKey = `${b.source}:${b.type}`;
-  const catOptions = () => [['', 'Any category'], ...(categoryLists.get(catKey) || []).map((c) => [c.id, c.label])];
-  const category = select(catOptions(), b.category, (val) => change({ category: val }));
+  const category = categoryMenu(() => categoryLists.get(catKey) || [], b.categories, (list) => {
+    // Only the results change, so the menu can stay open while more are ticked.
+    invalidateResults({ categories: list });
+    loadResults();
+  });
   if (!categoryLists.has(catKey)) {
     api('meta.categories', { source: b.source, type: b.type }).then((list) => {
       if (!Array.isArray(list)) return;
       categoryLists.set(catKey, list);
-      const menu = category.firstChild;
-      if (menu.isConnected) fill(menu, ...catOptions().map(([val, label]) => h('option', { value: val, selected: val === b.category }, label)));
+      if (category.isConnected) category.refresh();
     }).catch(() => {}); // e.g. CurseForge without a key: the menu just stays at "Any category"
   }
   // Browsing for a different version or loader than the selected instance is allowed, but flagged.
@@ -939,7 +984,7 @@ function viewLibrary(v) {
     if (!res.files.length) {
       fill(list, message(
         h('p', {}, `No ${TYPES[type].toLowerCase()} in this instance yet`),
-        btn(`Browse ${TYPES[type]}`, () => { invalidateResults({ type, category: '' }); go('browse'); })));
+        btn(`Browse ${TYPES[type]}`, () => { invalidateResults({ type, categories: [] }); go('browse'); })));
       return;
     }
     fill(list, ...res.files.map((f) => {

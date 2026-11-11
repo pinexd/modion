@@ -40,9 +40,10 @@ function normVersion(v) {
   };
 }
 
-async function search({ type = 'mod', query = '', gameVersion, loader, category, sort = 'relevance', page = 0 }) {
+async function search({ type = 'mod', query = '', gameVersion, loader, categories = [], sort = 'relevance', page = 0 }) {
   const facets = [[`project_type:${type}`]];
-  if (category) facets.push([`categories:${category}`]);
+  // One group per category: a project has to be in every one that was picked.
+  for (const c of arr(categories)) if (/^[\w-]+$/.test(c)) facets.push([`categories:${c}`]);
   if (gameVersion) facets.push([`versions:${gameVersion}`]);
   if (loader && type === 'mod') facets.push(accepted(loader).map((l) => `categories:${l}`));
   if (loader && type === 'modpack') facets.push([`categories:${loader}`]); // a pack is built for one loader exactly
