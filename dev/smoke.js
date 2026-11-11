@@ -676,6 +676,75 @@ require('../main.js').ready.then(async (win) => {
     }
   });
 
+  await step('instance icons: pick a picture, choose how it fits, remove it; a pack brings its own', async () => {
+    const zlib = require('zlib');
+    // A plain-colour PNG of the given size, written by hand.
+    const png = (w, h, file) => {
+      const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const body = Buffer.concat([Buffer.from(type), data]); const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(body)); return Buffer.concat([len, body, crc]); };
+      const head = Buffer.alloc(13); head.writeUInt32BE(w, 0); head.writeUInt32BE(h, 4); head[8] = 8; head[9] = 2;
+      const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(w * 3, 0x80)]);
+      fs.writeFileSync(file, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(Buffer.concat(Array(h).fill(row)))), chunk('IEND', Buffer.alloc(0))]));
+      return file;
+    };
+    const wide = png(200, 100, path.join(work, 'wide.png')), square = png(60, 60, path.join(work, 'square.png'));
+    await js(`go('instances')`);
+    const id = await js(`S.cfg.instances[0].id`);
+    const size = () => js(`(async () => { const i = S.cfg.instances.find(x => x.id === '${id}'); if (!i.icon) return 'none'; const img = await loadImage(i.icon); return img.naturalWidth + 'x' + img.naturalHeight; })()`);
+    const clickIcon = () => js(`document.querySelectorAll('#view .row')[0].querySelector('.icon-edit').click()`);
+    const press = (label) => js(`[...document.querySelectorAll('#overlay button')].find(b => b.textContent.startsWith('${label}')).click()`);
+    expect(await size() === 'none' && await js(`Boolean(document.querySelector('#view .icon-edit .pencil'))`), 'the instance does not start with the standard icon and a pencil');
+
+    nextPick = wide;
+    await clickIcon();
+    await waitFor(`document.querySelectorAll('#overlay .fit').length === 3`, 'fit choices for a picture that is not square');
+    await shot('25-icon-fit');
+    await press('Crop to fit');
+    await waitFor(`S.cfg.instances.find(x => x.id === '${id}').icon`, 'icon saved');
+    expect(await size() === '128x128', `cropped icon is ${await size()}`);
+    expect(await js(`!document.querySelector('#view .row .icon-edit img').classList.contains('px')`), 'the row still shows the standard icon');
+
+    await clickIcon(); // it has an icon now: the choice between a new picture and removing it
+    await waitFor(`[...document.querySelectorAll('#overlay button')].some(b => b.textContent === 'Remove Icon')`, 'change-or-remove screen');
+    await press('Choose Picture');
+    await waitFor(`document.querySelectorAll('#overlay .fit').length === 3`, 'fit choices again');
+    await press('Leave as is');
+    await waitFor(`!document.querySelector('#overlay .fit')`, 'choice made');
+    await sleep(300);
+    expect(await size() === '128x64', `as-is icon is ${await size()}`);
+    await clickIcon();
+    await waitFor(`[...document.querySelectorAll('#overlay button')].some(b => b.textContent === 'Remove Icon')`, 'change-or-remove screen');
+    await press('Choose Picture');
+    await waitFor(`document.querySelectorAll('#overlay .fit').length === 3`, 'fit choices a third time');
+    await press('Stretch to fit');
+    await sleep(400);
+    expect(await size() === '128x128', `stretched icon is ${await size()}`);
+
+    nextPick = square; // a square picture needs no question
+    await clickIcon();
+    await waitFor(`[...document.querySelectorAll('#overlay button')].some(b => b.textContent === 'Remove Icon')`, 'change-or-remove screen');
+    await press('Choose Picture');
+    await sleep(600);
+    expect(await js(`document.querySelector('#overlay').hidden`) && await size() === '128x128', 'a square picture was not applied directly');
+    expect(fs.existsSync(path.join(work, 'profile', 'icons', `${id}.png`)), 'the icon file was not written');
+
+    const bad = (v) => js(`window.modion.call('instances.setIcon', { id: '${id}', png: ${JSON.stringify(v)} }).then(r => r.code || 'OK')`);
+    expect(await bad('data:image/png;base64,' + Buffer.from('not a png at all, just text of some length').toString('base64')) === 'BAD_IMAGE'
+      && await bad('data:text/html;base64,PGI+') === 'BAD_IMAGE' && await bad('data:image/png;base64,' + fs.readFileSync(png(400, 400, path.join(work, 'big.png'))).toString('base64')) === 'BAD_IMAGE', 'something that is not a small PNG was stored as an icon');
+
+    // A modpack's icon from the site.
+    const pack = await js(`api('search', { source: 'modrinth', type: 'modpack', query: 'Fabulously Optimized' }).then(r => r.hits[0])`);
+    await js(`window.modion.call('instances.removeIcon', { id: '${id}' }).then(r => setConfig(r.data))`);
+    expect(await size() === 'none', 'the icon was not removed');
+    await js(`adoptPackIcon('${id}', ${JSON.stringify(pack.icon)})`);
+    expect(await size() === '128x128', `pack icon is ${await size()}`);
+    await shot('26-icons');
+    await clickIcon();
+    await waitFor(`[...document.querySelectorAll('#overlay button')].some(b => b.textContent === 'Remove Icon')`, 'change-or-remove screen');
+    await press('Remove Icon');
+    await waitFor(`!S.cfg.instances.find(x => x.id === '${id}').icon`, 'icon removed');
+    expect(!fs.existsSync(path.join(work, 'profile', 'icons', `${id}.png`)), 'the icon file was left behind');
+  });
+
   await step('instance settings: Java, memory slider, arguments and environment', async () => {
     await js(`go('instances')`);
     const id = await js(`S.cfg.instances[0].id`);

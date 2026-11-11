@@ -39,6 +39,27 @@ const offered = new Set();
 const offeredJava = new Set();
 let pendingUpdate = null; // what the last update check found
 
+/* ---------- instance icons ---------- */
+// An instance's own icon is a small PNG in Modion's settings folder, <id>.png. The page
+// does the picture work (it can read every image format, and crop or stretch); this side
+// only stores a PNG after checking that it is one, and hands it back as part of the config.
+const ICON_MAX_BYTES = 400 * 1024, ICON_MAX_SIDE = 256;
+const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp' };
+const iconCache = new Map(); // instance id -> data URL, or null when it has none
+const iconFile = (idValue) => path.join(app.getPath('userData'), 'icons', `${String(idValue).replace(/[^\w-]/g, '')}.png`);
+function iconOf(idValue) {
+  if (!iconCache.has(idValue)) {
+    let data = null;
+    try { data = `data:image/png;base64,${fs.readFileSync(iconFile(idValue)).toString('base64')}`; } catch {}
+    iconCache.set(idValue, data);
+  }
+  return iconCache.get(idValue);
+}
+function dropIcon(idValue) {
+  try { fs.rmSync(iconFile(idValue), { force: true }); } catch {}
+  iconCache.delete(idValue);
+}
+
 const emit = (data) => {
   if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('download', data);
 };
@@ -120,7 +141,7 @@ function publicConfig() {
     instances: list.map((i) => {
       const how = howToLaunch(i);
       // `movable`: an instance of Modion's own kind, which can be moved to another folder.
-      return { ...i, launch: how ? { play: how.play, label: how.label, ...(how.signIn ? { signIn: true } : {}) } : null, movable: Boolean(i.managed && libraries.isOwn(i.home)) };
+      return { ...i, icon: iconOf(i.id), launch: how ? { play: how.play, label: how.label, ...(how.signIn ? { signIn: true } : {}) } : null, movable: Boolean(i.managed && libraries.isOwn(i.home)) };
     }),
     canCreate: store.config.launchMode !== 'prism' || launcher.canCreate(),
     // Folders holding the instances Modion made itself; new ones go into the default one.
@@ -320,7 +341,7 @@ async function importPack(file, fallbackName) {
 
 function forget(idValue, { keepRecords } = {}) {
   store.config.instances = store.config.instances.filter((i) => i.id !== idValue);
-  if (!keepRecords) delete store.manifest[idValue];
+  if (!keepRecords) { delete store.manifest[idValue]; dropIcon(idValue); }
   if (!store.active()) store.config.activeInstanceId = store.config.instances[0] ? store.config.instances[0].id : null;
   store.saveConfig();
   store.saveManifest();
@@ -747,6 +768,68 @@ const methods = {
     }
     swap();
     return { config: publicConfig(), moved };
+  },
+
+  // Lets the person pick a picture for an instance's icon and hands it to the page, which
+  // fits it and sends back the finished icon (instances.setIcon).
+  'instances.pickIcon': async () => {
+    const pick = await dialog.showOpenDialog(liveWindow(), {
+      title: 'Choose an icon',
+      filters: [{ name: 'Images', extensions: Object.keys(IMAGE_TYPES) }],
+      properties: ['openFile'],
+    });
+    if (pick.canceled || !pick.filePaths[0]) return null;
+    const file = pick.filePaths[0];
+    const type = IMAGE_TYPES[path.extname(file).slice(1).toLowerCase()];
+    if (!type) throw new ApiError('Choose a PNG, JPEG, WebP, GIF or BMP picture.', 'BAD_IMAGE');
+    let bytes;
+    try {
+      if (fs.statSync(file).size > 20 * 2 ** 20) throw new ApiError('That picture is larger than 20 MB.', 'BAD_IMAGE');
+      bytes = fs.readFileSync(file);
+    } catch (e) {
+      throw e instanceof ApiError ? e : new ApiError(`Could not read the picture: ${e.code || e.message}.`, 'FS');
+    }
+    return { data: `data:${type};base64,${bytes.toString('base64')}` };
+  },
+
+  // Fetches a project's icon from Modrinth or CurseForge for the page to fit (used for modpacks).
+  'instances.fetchIcon': async (a) => {
+    let u;
+    try { u = new URL(text(a.url, 2000)); } catch { throw new ApiError('That link is not valid.', 'BAD_URL'); }
+    if (u.protocol !== 'https:') throw new ApiError('Refusing a non-HTTPS picture.', 'BAD_URL');
+    let res;
+    try { res = await fetch(u, { headers: { 'User-Agent': require('./src/http').UA }, signal: AbortSignal.timeout(20000) }); } catch { throw new ApiError(`Could not reach ${u.hostname}.`, 'NETWORK'); }
+    const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!res.ok || !Object.values(IMAGE_TYPES).includes(type)) throw new ApiError('That link did not give a picture.', 'BAD_IMAGE');
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length > 8 * 2 ** 20) throw new ApiError('That picture is too large.', 'BAD_IMAGE');
+    return { data: `data:${type};base64,${bytes.toString('base64')}` };
+  },
+
+  'instances.setIcon': (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    const m = typeof a.png === 'string' ? a.png.match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/) : null;
+    const bytes = m ? Buffer.from(m[1], 'base64') : null;
+    // A real PNG, of icon size: its first chunk gives the width and height.
+    const ok = bytes && bytes.length >= 33 && bytes.length <= ICON_MAX_BYTES
+      && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) && bytes.toString('latin1', 12, 16) === 'IHDR'
+      && bytes.readUInt32BE(16) >= 1 && bytes.readUInt32BE(16) <= ICON_MAX_SIDE && bytes.readUInt32BE(20) >= 1 && bytes.readUInt32BE(20) <= ICON_MAX_SIDE;
+    if (!ok) throw new ApiError('That is not a usable icon.', 'BAD_IMAGE');
+    try {
+      fs.mkdirSync(path.dirname(iconFile(inst.id)), { recursive: true });
+      fs.writeFileSync(iconFile(inst.id), bytes);
+    } catch (e) {
+      throw new ApiError(`Could not save the icon: ${e.code || e.message}.`, 'FS');
+    }
+    iconCache.delete(inst.id);
+    return publicConfig();
+  },
+
+  'instances.removeIcon': (a) => {
+    if (!store.instance(a.id)) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    dropIcon(a.id);
+    return publicConfig();
   },
 
   // What the instance settings screen shows: the saved settings and what there is to choose from.

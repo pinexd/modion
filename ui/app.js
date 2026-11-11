@@ -183,6 +183,94 @@ function versionSelect(value, blank, onchange) {
   return el;
 }
 
+/* ---------- instance icons ---------- */
+
+const ICON_SIDE = 128;
+// An instance's picture: its own icon if it has one, else the grass block.
+const instImg = (i) => (i && i.icon ? h('img', { alt: '', src: i.icon }) : h('img', { class: 'px', alt: '', src: Pixel.icon('logo') }));
+
+const loadImage = (src) => new Promise((resolve, reject) => {
+  const img = new Image();
+  img.onload = () => resolve(img);
+  img.onerror = () => reject(Object.assign(new Error('That file could not be read as a picture.'), { code: 'BAD_IMAGE' }));
+  img.src = src;
+});
+
+// Draws a picture as an icon and returns it as a PNG data URL.
+//   crop:    fills the square, cutting off what sticks out
+//   stretch: fills the square, squashing the picture to fit
+//   asis:    keeps the picture's shape; the icon is then not square
+function fitIcon(img, fit) {
+  const w = img.naturalWidth, hgt = img.naturalHeight;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  if (fit === 'asis') {
+    const k = ICON_SIDE / Math.max(w, hgt);
+    canvas.width = Math.max(1, Math.round(w * k));
+    canvas.height = Math.max(1, Math.round(hgt * k));
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  } else {
+    canvas.width = canvas.height = ICON_SIDE;
+    if (fit === 'stretch') ctx.drawImage(img, 0, 0, ICON_SIDE, ICON_SIDE);
+    else { const side = Math.min(w, hgt); ctx.drawImage(img, (w - side) / 2, (hgt - side) / 2, side, side, 0, 0, ICON_SIDE, ICON_SIDE); }
+  }
+  return canvas.toDataURL('image/png');
+}
+
+async function saveIcon(id, png) {
+  setConfig(await api('instances.setIcon', { id, png }));
+  render();
+}
+
+// Clicking an instance's icon: pick a picture; one that is not square asks how to fit it.
+async function editIcon(i) {
+  if (i.icon) {
+    const choice = await new Promise((resolve) => {
+      let answer = null;
+      showScreen(`Icon of ${i.name}`,
+        h('div', { class: 'screen-body' }, h('div', { class: 'confirm icon-now' }, h('div', { class: 'slot s96' }, instImg(i)), h('p', {}, 'Choose a new picture, or go back to the standard icon.'))),
+        [btn('Cancel', closeScreen), btn('Remove Icon', () => { answer = 'remove'; closeScreen(); }), btn('Choose Picture...', () => { answer = 'pick'; closeScreen(); }, 'green')],
+        () => resolve(answer));
+    });
+    if (choice === 'remove') { try { setConfig(await api('instances.removeIcon', { id: i.id })); } catch (e) { fail(e, 'Icon not removed'); } render(); return; }
+    if (choice !== 'pick') return;
+  }
+  let img;
+  try {
+    const picked = await api('instances.pickIcon');
+    if (!picked) return;
+    img = await loadImage(picked.data);
+  } catch (e) { fail(e, 'Icon not changed'); return; }
+  const w = img.naturalWidth, hgt = img.naturalHeight;
+  let fit = 'crop';
+  if (Math.abs(w - hgt) > Math.max(w, hgt) * 0.02) { // not square (give or take a pixel or two)
+    const option = (id, title, text) => h('button', { class: 'fit', onclick: () => { fit = id; chosen = true; closeScreen(); } },
+      h('div', { class: 'slot s96' }, h('img', { alt: '', src: fitIcon(img, id) })), h('div', { class: 'fit-title' }, title), h('div', { class: 'faint small' }, text));
+    let chosen = false;
+    await new Promise((resolve) => showScreen('This picture is not square',
+      h('div', { class: 'screen-body' },
+        h('div', { class: 'confirm' }, h('p', {}, `The picture is ${w} by ${hgt}. Icons are square: how should it fit?`)),
+        h('div', { class: 'fits' },
+          option('crop', 'Crop to fit', 'Fills the icon; the edges are cut off.'),
+          option('stretch', 'Stretch to fit', 'Fills the icon; the picture is squashed.'),
+          option('asis', 'Leave as is', 'Keeps its shape, with empty space beside it.'))),
+      [btn('Cancel', closeScreen)], resolve));
+    if (!chosen) return;
+  }
+  try { await saveIcon(i.id, fitIcon(img, fit)); } catch (e) { fail(e, 'Icon not changed'); }
+}
+
+// A modpack's own icon becomes the icon of the instance made from it. Best effort: an
+// instance without it is still a good instance.
+async function adoptPackIcon(id, url) {
+  if (!url) return;
+  try {
+    const got = await api('instances.fetchIcon', { url });
+    await saveIcon(id, fitIcon(await loadImage(got.data), 'crop'));
+  } catch {}
+}
+
 /* ---------- toasts and the download bar ---------- */
 
 function toast(title, text, { tone = 'yellow', icon, time = 5000 } = {}) {
@@ -356,7 +444,7 @@ function renderTop() {
 function renderBottom() {
   const inst = activeInst();
   const picker = h('button', { class: 'inst-btn', title: inst ? inst.path : '', onclick: () => openInstances() },
-    h('img', { class: 'px', alt: '', src: Pixel.icon('logo') }),
+    instImg(inst),
     h('div', { class: 'inst-text' },
       h('div', { class: 'inst-name' }, inst ? inst.name : 'No instance selected'),
       h('div', { class: 'faint small' }, inst ? instLabel(inst) : 'Choose where to install')),
@@ -514,6 +602,7 @@ async function doPackInstall(req) {
     for (const sk of left.slice(0, 4)) toast('Left out of the pack', `${sk.title}: ${sk.reason}`, { tone: 'gold', time: 12000 });
     if (left.length > 4) toast('Left out of the pack', `...and ${left.length - 4} more files.`, { tone: 'gold', time: 12000 });
     renderBottom();
+    await adoptPackIcon(r.id, req.icon);
     if (r.leftOut) leftOutScreen(r.id);
   } catch (e) {
     // The author only offers this pack on the website: carry on there.
@@ -1519,7 +1608,8 @@ function viewInstances(v) {
       redraw();
     }, 'small');
     return h('div', { class: `row ${active ? 'selected' : ''}` },
-      h('div', { class: 'slot s48' }, h('img', { class: 'px', alt: '', src: Pixel.icon('logo') })),
+      h('button', { class: 'slot s48 icon-edit', title: 'Change the icon', onclick: (e) => { e.stopPropagation(); editIcon(i); } },
+        instImg(i), h('span', { class: 'pencil' }, '\u270e')),
       h('div', { class: 'row-main' },
         h('div', { class: 'row-title' }, i.name, h('span', { class: 'gold' }, `  ${instLabel(i)}`),
           h('span', { class: 'faint' }, `  ${i.movable ? 'made by Modion' : i.managed ? 'made by Modion, in Prism Launcher' : 'added from elsewhere'}`)),

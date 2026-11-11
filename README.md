@@ -85,6 +85,14 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
   relocate one with everything in it, or remove it from the list. An instance carries its
   identity in its `instance.json`, so a library moved by hand is recognised when its new
   folder is added. Such instances also have a **Move** button on the Instances page.
+- **Instance icons** – hover an instance's icon on the Instances page and click the pencil
+  to give it a picture of your own (a picture that is not square asks whether to crop,
+  stretch or leave it). An instance made from a Modrinth or CurseForge modpack gets the
+  pack's icon.
+- **Left-out pack mods** – when a CurseForge pack contains mods whose authors only allow
+  downloads from the website, Modion lists them after installing the pack and can open
+  their pages one by one, marking each as it is fetched. The list stays on the instance
+  ("Left Out") until the files are installed.
 - **Instance settings** – the Settings button on an instance (Instances page): which Java to
   use (automatic, one found on the computer, or one you browse to), a memory slider, extra
   Java arguments and environment variables. They apply when Modion starts the game itself.

@@ -367,3 +367,15 @@ p.label.gold { color: var(--gold, #ffd75e); }
 .sub-box { width: min(440px, 90%); background: #313131; border: 1px solid #5a5a5a; box-shadow: 0 12px 32px rgba(0, 0, 0, .6); }
 .sub-box p { padding: 18px 24px; margin: 0; }
 .btn.gold-btn { border-color: #ffb84d; color: #ffd98a; }
+
+/* ---------- instance icons ---------- */
+.inst-btn > img:not(.px) { object-fit: contain; }
+.icon-edit { position: relative; padding: 0; border: 0; cursor: pointer; }
+.icon-edit .pencil { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; display: grid; place-items: center; background: #1bd96a; color: #10301c; font-size: 12px; line-height: 1; opacity: 0; transition: opacity .12s; }
+.icon-edit:hover .pencil, .icon-edit:focus-visible .pencil { opacity: 1; }
+.icon-edit:hover img { filter: brightness(.8); }
+.icon-now { display: flex; gap: 18px; align-items: center; }
+.fits { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding: 0 24px 24px; }
+.fit { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 12px; background: #2b2b2b; border: 1px solid var(--line); color: inherit; font: inherit; cursor: pointer; text-align: center; }
+.fit:hover, .fit:focus-visible { border-color: #1bd96a; outline: none; }
+.fit-title { font-weight: 700; }
