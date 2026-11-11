@@ -195,6 +195,33 @@ async function fingerprints(list) {
   return out;
 }
 
+// Names local files that CurseForge knows: takes file fingerprints and returns
+// { fingerprint: { source, projectId, versionId, versionName, title, icon } }.
+async function identify(list) {
+  const files = {};
+  for (let i = 0; i < list.length; i += 200) {
+    const reply = await cf(`/fingerprints/${GAME}`, null, { fingerprints: list.slice(i, i + 200) });
+    for (const m of arr(reply.data && reply.data.exactMatches)) {
+      if (m && m.file && m.file.fileFingerprint !== undefined && m.file.modId) files[m.file.fileFingerprint] = m.file;
+    }
+  }
+  // The match says which project a file belongs to; the project's name and icon are asked for in one go.
+  const projects = new Map();
+  const ids = [...new Set(Object.values(files).map((f) => Number(f.modId)))];
+  for (let i = 0; i < ids.length; i += 200) {
+    for (const m of arr((await cf('/mods', null, { modIds: ids.slice(i, i + 200) })).data)) if (m && m.id) projects.set(Number(m.id), m);
+  }
+  const out = {};
+  for (const [print, f] of Object.entries(files)) {
+    const m = projects.get(Number(f.modId)) || {};
+    out[print] = {
+      source: 'curseforge', projectId: String(f.modId), versionId: String(f.id), versionName: f.displayName || f.fileName || '',
+      title: m.name || f.displayName || f.fileName || 'Unnamed', icon: (m.logo && (m.logo.thumbnailUrl || m.logo.url)) || null,
+    };
+  }
+  return out;
+}
+
 // Several files by ID in one request (used when importing a modpack).
 async function getFiles(fileIds) {
   if (!fileIds.length) return [];
@@ -206,4 +233,4 @@ async function testKey() {
   return true;
 }
 
-module.exports = { setKey, getKey, hasKey, search, project, versions, getVersion, getFiles, latest, brief, categories, fingerprints, testKey };
+module.exports = { identify, setKey, getKey, hasKey, search, project, versions, getVersion, getFiles, latest, brief, categories, fingerprints, testKey };

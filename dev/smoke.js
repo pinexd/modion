@@ -651,6 +651,31 @@ require('../main.js').ready.then(async (win) => {
     }
   });
 
+  await step('files only CurseForge knows are named in the library', async () => {
+    const cf = require('../src/curseforge');
+    const real = { hasKey: cf.hasKey, identify: cf.identify, fingerprints: cf.fingerprints };
+    let asked = 0;
+    cf.hasKey = () => true;
+    cf.fingerprints = async () => ({});
+    cf.identify = async (prints) => { asked++; return Object.fromEntries(prints.slice(0, 1).map((p) => [p, { source: 'curseforge', projectId: '4242', versionId: '9', versionName: '1.0', title: 'Only On CurseForge', icon: null }])); };
+    try {
+      await js(`api('instances.setActive', { id: S.cfg.instances[0].id }).then((c) => setConfig(c))`);
+      fs.writeFileSync(path.join(mods, 'cf-only-mod.jar'), 'not on modrinth ' + Date.now());
+      fs.writeFileSync(path.join(mods, 'nobody-knows.jar'), 'nobody knows this one ' + Date.now());
+      const find = (list, file) => list.files.find((f) => f.file === file);
+      let list = (await js(`window.modion.call('library.list', { type: 'mod' })`)).data;
+      const named = find(list, 'cf-only-mod.jar'), stranger = find(list, 'nobody-knows.jar');
+      expect(named && named.meta && named.meta.title === 'Only On CurseForge' && named.meta.source === 'curseforge' && named.meta.projectId === '4242', `CurseForge-only file: ${JSON.stringify(named)}`);
+      expect(stranger && !(stranger.meta && stranger.meta.projectId), `a file nobody knows was named: ${JSON.stringify(stranger)}`);
+      list = (await js(`window.modion.call('library.list', { type: 'mod' })`)).data;
+      expect(asked === 1 && find(list, 'cf-only-mod.jar').meta.title === 'Only On CurseForge', `CurseForge was asked ${asked} times for the same files`);
+      fs.rmSync(path.join(mods, 'cf-only-mod.jar'));
+      fs.rmSync(path.join(mods, 'nobody-knows.jar'));
+    } finally {
+      Object.assign(cf, real);
+    }
+  });
+
   await step('instance settings: Java, memory slider, arguments and environment', async () => {
     await js(`go('instances')`);
     const id = await js(`S.cfg.instances[0].id`);

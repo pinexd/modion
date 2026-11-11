@@ -240,6 +240,31 @@ async function scan({ store, sources }, inst, type) {
       }
     }
   }
+  // Files Modrinth does not know may be CurseForge-only (most of a CurseForge modpack is).
+  // CurseForge is asked once per file, and again if the file changes; without a key, later.
+  entries = tracked();
+  if (entries && sources.curseforge && sources.curseforge.hasKey()) {
+    const strangers = files.filter((f) => { const e = entries[f.key]; return e && e.unknown && !e.askedCurseforge && e.size === f.size && e.mtime === f.mtime; });
+    if (strangers.length) {
+      try {
+        const prints = new Map();
+        for (const f of strangers) {
+          const print = await fingerprintFile(path.join(dir, f.file), f.size, f.mtime);
+          if (print !== null) prints.set(f, print);
+        }
+        const found = await sources.curseforge.identify([...new Set(prints.values())]);
+        entries = tracked();
+        for (const f of entries ? strangers : []) {
+          const now = entries[f.key];
+          if (!now || !now.unknown || now.size !== f.size || now.mtime !== f.mtime) continue; // changed meanwhile
+          const hit = found[prints.get(f)];
+          entries[f.key] = hit ? { ...hit, type, size: f.size, mtime: f.mtime, linkedCurseforge: true } : { ...now, askedCurseforge: true };
+          dirty = true;
+        }
+      } catch {} // offline or refused: asked again next time
+    }
+  }
+
   // Cross-links: the same file usually exists on the other site too. Recording that project
   // lets a mod installed from Modrinth show as installed on CurseForge, and the reverse.
   // Each lookup is tried until it gets an answer (it is skipped while offline or without a key).
