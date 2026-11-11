@@ -738,6 +738,18 @@ require('../main.js').ready.then(async (win) => {
     await js(`adoptPackIcon('${id}', ${JSON.stringify(pack.icon)})`);
     expect(await size() === '128x128', `pack icon is ${await size()}`);
     await shot('26-icons');
+    // The same picture wherever the instance is shown: the bottom bar, the picker, its settings screen.
+    await js(`api('instances.setActive', { id: '${id}' }).then((c) => { setConfig(c); render(); })`);
+    await waitFor(`document.querySelector('#bottom .inst-btn img') && !document.querySelector('#bottom .inst-btn img').classList.contains('px')`, 'icon in the bottom bar');
+    await js(`openInstances()`);
+    await waitFor(`document.querySelectorAll('#overlay .row .slot img').length > 0`, 'icons in the instance picker');
+    expect(await js(`(() => { const imgs = [...document.querySelectorAll('#overlay .list')[0].querySelectorAll('.row .slot img')]; return imgs.length === S.cfg.instances.length && !imgs[0].classList.contains('px') && imgs[0].src === S.cfg.instances[0].icon; })()`), 'the picker does not show each instance with its icon');
+    await shot('27-picker-icons');
+    await js(`closeScreen()`);
+    await js(`go('instances')`);
+    await js(`[...document.querySelectorAll('#view .row')[0].querySelectorAll('.btn')].find(b => b.textContent === 'Settings').click()`);
+    await waitFor(`document.querySelector('#overlay .whose img') && !document.querySelector('#overlay .whose img').classList.contains('px')`, 'icon on the settings screen');
+    await js(`closeScreen()`);
     await clickIcon();
     await waitFor(`[...document.querySelectorAll('#overlay button')].some(b => b.textContent === 'Remove Icon')`, 'change-or-remove screen');
     await press('Remove Icon');

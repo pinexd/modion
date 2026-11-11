@@ -480,7 +480,7 @@ function renderBottom() {
       play.textContent = 'Starting...'; // a first launch downloads the game, which takes a while
       try {
         const r = await api('instances.launch', { id: inst.id });
-        toast(r.play ? `Starting ${inst.name}` : `Opening ${r.label}`, r.play ? `${r.label} is launching the game.` : `Start "${inst.name}" from there.`);
+        toast(r.play ? `Starting ${inst.name}` : `Opening ${r.label}`, r.play ? `${r.label} is launching the game.` : `Start "${inst.name}" from there.`, { icon: inst.icon });
         if (S.cfg.openLogOnLaunch !== false) { S.library.type = 'log'; go('library'); } // watch the game start
       } catch (e) { fail(e, 'Could not start the game'); }
       setTimeout(() => { play.disabled = false; }, 4000); // long enough that a double click cannot start it twice
@@ -597,12 +597,12 @@ async function doPackInstall(req) {
     const r = await api(req.website ? 'modpack.installViaWebsite' : 'modpack.install', req);
     if (!r) return; // (nothing to report)
     setConfig(r.config, { follow: true });
-    toast('Modpack installed', `${r.name} is a new instance with ${r.files} file${r.files === 1 ? '' : 's'}. It is now selected.`, { time: 9000 });
+    await adoptPackIcon(r.id, req.icon);
+    toast('Modpack installed', `${r.name} is a new instance with ${r.files} file${r.files === 1 ? '' : 's'}. It is now selected.`, { time: 9000, icon: (S.cfg.instances.find((i) => i.id === r.id) || {}).icon });
     const left = Array.isArray(r.skipped) ? r.skipped : [];
     for (const sk of left.slice(0, 4)) toast('Left out of the pack', `${sk.title}: ${sk.reason}`, { tone: 'gold', time: 12000 });
     if (left.length > 4) toast('Left out of the pack', `...and ${left.length - 4} more files.`, { tone: 'gold', time: 12000 });
     renderBottom();
-    await adoptPackIcon(r.id, req.icon);
     if (r.leftOut) leftOutScreen(r.id);
   } catch (e) {
     // The author only offers this pack on the website: carry on there.
@@ -1292,6 +1292,7 @@ function openInstances({ autoDetect, start } = {}) {
     class: `row click ${i.id === S.cfg.activeInstanceId ? 'selected' : ''}`, tabIndex: 0,
     onclick: () => apply(api('instances.setActive', { id: i.id })),
   },
+    h('div', { class: 'slot s48' }, instImg(i)),
     h('div', { class: 'row-main' },
       h('div', { class: 'row-title' }, i.name, h('span', { class: 'gold' }, `  ${instLabel(i)}`)),
       h('div', { class: 'faint path' }, '\u200e' + i.path)),
@@ -1465,7 +1466,9 @@ function leftOutScreen(instId) {
 
   draw();
   showScreen('Mods left out of the pack',
-    h('div', { class: 'screen-body' }, h('div', { class: 'confirm' }, intro), list, ask),
+    h('div', { class: 'screen-body' },
+      h('div', { class: 'whose' }, h('div', { class: 'slot s48' }, instImg(inst)), h('div', {}, h('div', { class: 'row-title' }, inst.name), h('div', { class: 'faint small' }, instLabel(inst)))),
+      h('div', { class: 'confirm' }, intro), list, ask),
     [], () => { open = false; stopped = true; render(); });
   // This screen draws its own buttons, since they change as it goes.
   const bar = $('#overlay .modal > .screen-buttons');
@@ -1544,11 +1547,12 @@ async function instanceSettings(i) {
         memory: auto || usesOwnMemory(args.value) ? null : Number(slider.value),
       }));
       closeScreen();
-      toast('Settings saved', i.name);
+      toast('Settings saved', i.name, { icon: i.icon });
     } catch (e) { fail(e, 'Settings not saved'); }
   };
   showScreen(`Settings: ${i.name}`,
     h('div', { class: 'screen-body' },
+      h('div', { class: 'whose' }, h('div', { class: 'slot s48' }, instImg(i)), h('div', {}, h('div', { class: 'row-title' }, i.name), h('div', { class: 'faint small' }, instLabel(i)))),
       !info.direct && h('div', { class: 'bar warn' }, info.startedBy
         ? `These settings apply when Modion starts the game itself. Right now this instance is started through ${info.startedBy}, which has its own settings.`
         : 'These settings apply when Modion starts the game itself, which it cannot do for this instance with the current launch setting.'),
@@ -1603,7 +1607,7 @@ function viewInstances(v) {
       move.textContent = 'Moving...';
       try {
         const r = await api('instances.move', { id: i.id });
-        if (r) { setConfig(r, { follow: true }); toast('Instance moved', `${i.name} is now in its new folder.`); }
+        if (r) { setConfig(r, { follow: true }); toast('Instance moved', `${i.name} is now in its new folder.`, { icon: i.icon }); }
       } catch (e) { fail(e, 'Could not move'); }
       redraw();
     }, 'small');
