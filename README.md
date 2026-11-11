@@ -10,23 +10,35 @@ launchers you already use.
 
 > **NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.**
 
-## Run
+## Install
 
-Needs Electron (`sudo pacman -S electron`). No other dependencies, no build step.
+### Linux
+
+Download `modion-<version>-linux-x64.tar.gz` from a
+[release](https://github.com/pinexd/modion/releases), unpack it and run the installer in it:
 
 ```sh
-./modion
+./install.sh
 ```
 
-`./install-desktop-entry.sh` adds it to your application menu.
+It installs for your user only (no root): the program goes to `~/.local/opt/modion`, with
+a `modion` command in `~/.local/bin` and an entry in the application menu. Electron is
+included. `./install.sh --uninstall` removes the program again and leaves your settings,
+instances and game files alone. You can also skip installing and run `./modion` straight
+from the unpacked folder.
 
 ### Windows
 
 Download `modion-<version>-windows-x64.zip` from a release, unpack it anywhere and run
-`Modion.exe`. Electron is included. The Windows port has not been tried on a real Windows
-computer yet: treat it as experimental and please report what breaks. Settings are kept in
-`%APPDATA%\Modion`, new instances in `%APPDATA%\Modion\instances`, and downloaded game
-files in `%LOCALAPPDATA%\ModionApp`.
+`Modion.exe`. Electron is included. Settings are kept in `%APPDATA%\Modion`, new
+instances in `%APPDATA%\Modion\instances`, and downloaded game files in
+`%LOCALAPPDATA%\ModionApp`.
+
+### From a checkout
+
+With Electron installed (`sudo pacman -S electron`), `./modion` in a clone of this
+repository starts it with no build step; `./install-desktop-entry.sh` adds that copy to
+the application menu. `dev/build-release.sh <version> <folder>` builds the release packages.
 
 ## Using it
 

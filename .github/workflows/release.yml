@@ -1,10 +1,10 @@
 # Run by hand: Actions tab -> Release -> Run workflow.
-# Packs Modion into a tarball (Linux) and a zip with Electron included (Windows) and opens
-# a release for them. With "draft" left on, the release
+# Builds the packages (Linux and Windows, each with Electron included) and opens a release
+# for them. With "draft" left on, the release
 # is not public until you press Publish on it, so the notes can be written or polished in
 # GitHub's release editor first.
 #
-# If the repository has a secret named CURSEFORGE_KEY, it is placed in the package as
+# If the repository has a secret named CURSEFORGE_KEY, it is placed in the packages as
 # curseforge.key so the release works with CurseForge out of the box. It is never committed.
 name: Release
 
@@ -59,47 +59,13 @@ jobs:
       - name: Check the code
         run: for f in main.js preload.js src/*.js ui/*.js; do node --check "$f"; done
 
-      - name: Pack
+      # One script builds everything (it is the same one that can be run by hand):
+      # Modion with Electron for Linux and for Windows, and Modion alone for self-update.
+      - name: Build the packages
         run: |
-          dir="modion-${TAG#v}"
-          mkdir "$dir"
-          cp -r main.js preload.js package.json modion install-desktop-entry.sh README.md src ui assets "$dir/"
-          [ -f LICENSE ] && cp LICENSE "$dir/"
-          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${TAG#v}\"/" "$dir/package.json"
-          if [ -n "$CURSEFORGE_KEY" ]; then
-            (umask 077; printf '%s\n' "$CURSEFORGE_KEY" > "$dir/curseforge.key")
-            chmod 644 "$dir/curseforge.key"
-          else
-            echo "::warning::No CURSEFORGE_KEY secret is set; this release ships without a CurseForge key."
-          fi
-          tar -czf "$dir.tar.gz" "$dir"
-          sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
-          echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
-          echo "APP_DIR=$dir" >> "$GITHUB_ENV"
-
-      # Windows has no system Electron, so its package carries one: Electron's own Windows
-      # build (checked against Electron's published checksums) with Modion placed inside.
-      - name: Pack for Windows
-        env:
-          ELECTRON: '44.10.2'
-        run: |
-          base="https://github.com/electron/electron/releases/download/v$ELECTRON"
-          zipname="electron-v$ELECTRON-win32-x64.zip"
-          curl -fsSL -o "$zipname" "$base/$zipname"
-          curl -fsSL -o SHASUMS256.txt "$base/SHASUMS256.txt"
-          grep " \*\?$zipname\$" SHASUMS256.txt | sed 's/ \*/  /' | sha256sum -c -
-          win="modion-${TAG#v}-windows-x64"
-          mkdir "$win"
-          unzip -q "$zipname" -d "$win"
-          rm -f "$win/resources/default_app.asar"
-          mv "$win/electron.exe" "$win/Modion.exe"
-          mkdir "$win/resources/app"
-          cp -r "$APP_DIR"/main.js "$APP_DIR"/preload.js "$APP_DIR"/package.json "$APP_DIR"/README.md "$APP_DIR"/src "$APP_DIR"/ui "$APP_DIR"/assets "$win/resources/app/"
-          [ -f "$APP_DIR/LICENSE" ] && cp "$APP_DIR/LICENSE" "$win/resources/app/"
-          [ -f "$APP_DIR/curseforge.key" ] && cp "$APP_DIR/curseforge.key" "$win/resources/app/"
-          zip -qr "$win.zip" "$win"
-          sha256sum "$win.zip" > "$win.zip.sha256"
-          echo "WIN_ASSET=$win.zip" >> "$GITHUB_ENV"
+          [ -n "$CURSEFORGE_KEY" ] || echo "::warning::No CURSEFORGE_KEY secret is set; this release ships without a CurseForge key."
+          dev/build-release.sh "${TAG#v}" dist
+          echo "V=${TAG#v}" >> "$GITHUB_ENV"
 
       - name: Create the release
         run: |
@@ -123,4 +89,7 @@ jobs:
           fi
           [ "$DRAFT" = "true" ] && args+=(--draft)
           [ "$PRERELEASE" = "true" ] && args+=(--prerelease)
-          gh release create "$TAG" "$ASSET" "$ASSET.sha256" "$WIN_ASSET" "$WIN_ASSET.sha256" "${args[@]}"
+          cd dist
+          assets=("modion-$V-linux-x64.tar.gz" "modion-$V-windows-x64.zip" "modion-$V-app.zip")
+          sha256sum "${assets[@]}" > SHA256SUMS.txt
+          gh release create "$TAG" "${assets[@]}" SHA256SUMS.txt "${args[@]}"
