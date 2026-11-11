@@ -535,9 +535,18 @@ function renderBottom() {
 const nav = { stack: [], at: -1, moving: false };
 const navKey = (n) => [n.view, n.source, n.btype, n.ltype, n.project ? `${n.project.hit.source}:${n.project.hit.id}` : ''].join('|');
 
+// Arriving somewhere new fades the page in once; a redraw of the same place does not.
+let shownPlace = '';
 function navRecord() {
-  if (nav.moving) return;
   const now = { view: S.view, source: S.browse.source, btype: S.browse.type, ltype: S.library.type, project: S.view === 'project' ? S.project : null };
+  if (navKey(now) !== shownPlace) {
+    shownPlace = navKey(now);
+    const v = $('#view');
+    v.classList.remove('enter');
+    void v.offsetWidth; // lets the animation start over
+    v.classList.add('enter');
+  }
+  if (nav.moving) return;
   if (nav.at >= 0 && navKey(nav.stack[nav.at]) === navKey(now)) { nav.stack[nav.at] = now; return; }
   nav.stack.length = nav.at + 1; // going somewhere new drops the "forward" places
   nav.stack.push(now);

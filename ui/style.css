@@ -395,3 +395,69 @@ p.label.gold { color: var(--gold, #ffd75e); }
 
 .whose { display: flex; gap: 14px; align-items: center; padding: 16px 24px 0; }
 .toast .slot img:not(.px) { object-fit: contain; }
+
+/* ---------- finish: motion, depth and focus ----------
+   Small touches over the flat base above. Nothing here changes layout. */
+:root { --ease: cubic-bezier(.2, .7, .2, 1); --quick: .14s; }
+
+/* Things answer the pointer smoothly instead of snapping. */
+.btn, .stop, .nav-item, .tab, .row, .field, .check .box, .inst-btn, .tag, #top .back, .slot img, .icon-edit .pencil {
+  transition: background-color var(--quick) var(--ease), border-color var(--quick) var(--ease), color var(--quick) var(--ease),
+    box-shadow var(--quick) var(--ease), transform var(--quick) var(--ease), filter var(--quick) var(--ease), opacity var(--quick) var(--ease);
+}
+.btn:active:not(:disabled), .stop:active:not(:disabled) { transform: translateY(1px); }
+.btn.green:hover:not(:disabled) { box-shadow: inset 0 2px var(--green-hi), inset 0 -2px var(--green-lo), 0 0 0 1px rgba(39, 206, 64, .25), 0 4px 18px rgba(39, 206, 64, .22); }
+.btn.red:hover:not(:disabled), .stop:hover:not(:disabled) { box-shadow: inset 0 2px #ef6a6a, inset 0 -2px #7d1717, 0 4px 18px rgba(220, 64, 64, .28); }
+.btn.play { box-shadow: inset 0 2px var(--green-hi), inset 0 -2px var(--green-lo), 0 6px 18px rgba(0, 0, 0, .45); }
+.btn.play:disabled { box-shadow: none; }
+
+/* While the game is open the Play button breathes, slowly. */
+.btn.green.playing:disabled { animation: breathe 3.2s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { box-shadow: inset 0 2px #6f9a7c, inset 0 -2px #2c4136, 0 0 0 rgba(39, 206, 64, 0); } 50% { box-shadow: inset 0 2px #6f9a7c, inset 0 -2px #2c4136, 0 0 22px rgba(39, 206, 64, .28); } }
+
+/* Sidebar and tabs: the marker slides in rather than appearing. */
+#rail { background: linear-gradient(180deg, #212121, var(--side) 220px); box-shadow: 1px 0 0 #141414; }
+.nav-item { position: relative; }
+.nav-item:hover:not(.on) { transform: translateX(2px); }
+.nav-item.on { background: linear-gradient(90deg, #3d3d3d, #333); }
+.tab { position: relative; border-bottom-color: transparent !important; }
+.tab::after { content: ''; position: absolute; left: 0; right: 0; bottom: -3px; height: 3px; background: #fff; transform: scaleX(0); transform-origin: left; transition: transform .22s var(--ease); }
+.tab.on::after { transform: scaleX(1); }
+.tab:hover:not(.on)::after { transform: scaleX(.35); background: #8a8a8a; }
+
+/* The header and the bottom bar sit a little above the page. */
+#top { position: relative; z-index: 2; box-shadow: 0 4px 14px rgba(0, 0, 0, .28); }
+#bottom { position: relative; z-index: 2; box-shadow: 0 -6px 18px rgba(0, 0, 0, .32); background: linear-gradient(180deg, #2a2a2a, var(--head)); }
+
+/* Lists: a marker slides in on the row under the pointer, and its picture lifts slightly. */
+.row.click { box-shadow: inset 0 0 #fff; }
+.row.click:hover, .row.click:focus-visible { box-shadow: inset 3px 0 #9a9a9a; }
+.row.selected, .row.click.selected { box-shadow: inset 4px 0 #fff; }
+.row.click:hover .slot img { transform: scale(1.06); }
+.slot { box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
+.field:focus { box-shadow: 0 0 0 3px rgba(255, 255, 255, .12); }
+.check input:checked + .box { box-shadow: 0 0 10px rgba(39, 206, 64, .35); }
+
+/* A new page fades up into place. */
+#view.enter { animation: arrive .2s var(--ease) both; }
+@keyframes arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* Dialogs: the page behind goes soft, and the dialog rises into view. */
+#overlay { backdrop-filter: blur(5px) saturate(.8); animation: dim .16s ease-out both; }
+.modal { animation: rise .2s var(--ease) both; box-shadow: 0 24px 64px rgba(0, 0, 0, .7), 0 0 0 1px rgba(255, 255, 255, .04); }
+#overlay.lightbox img { animation: rise .2s var(--ease) both; }
+@keyframes dim { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+
+/* Notifications and the download bar. */
+.toast { backdrop-filter: blur(8px); background: rgba(27, 27, 27, .92); box-shadow: 0 10px 28px rgba(0, 0, 0, .55); }
+.xp { overflow: hidden; }
+.xp i { background: linear-gradient(90deg, #1fae36, var(--green-hi)); box-shadow: 0 0 8px rgba(39, 206, 64, .6); transition: width .25s var(--ease); }
+
+::-webkit-scrollbar-thumb { border-radius: 6px; }
+
+/* People who ask their system for less motion get none of it. */
+@media (prefers-reduced-motion: reduce) {
+  #view.enter, #overlay, .modal, #overlay.lightbox img, .toast, .btn.green.playing:disabled { animation: none !important; }
+  *, *::before, *::after { transition-duration: .001s !important; }
+}
