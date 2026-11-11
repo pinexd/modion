@@ -509,10 +509,36 @@ require('../main.js').ready.then(async (win) => {
         await waitFor(`document.querySelector('#bottom .btn.playing:disabled') && document.querySelector('#bottom .btn.playing').textContent === 'Playing' && document.querySelector('#bottom .stop')`, 'Playing state with a stop button');
         expect((await call('instances.move', { id: twoInst.id })).code === 'BUSY', 'a running instance could be moved');
         await shot('15b-playing');
+        // Play and the stop button are centred as a pair.
+        const off = await js(`(() => { const w = document.querySelector('#bottom .play-wrap').getBoundingClientRect(), b = document.querySelector('#bottom').getBoundingClientRect(); return Math.abs((w.left + w.right) / 2 - (b.left + b.right) / 2); })()`);
+        expect(off < 2, `Play and stop are ${off}px off centre`);
+        // Stopping warns first; Cancel leaves the game alone.
+        const press = (label) => js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === '${label}').click()`);
         await js(`document.querySelector('#bottom .stop').click()`);
+        await waitFor(`!document.querySelector('#overlay').hidden && /unsaved progress/.test(document.querySelector('#overlay').textContent)`, 'stop warning');
+        await shot('15c-stop-warning');
+        await press('Cancel');
+        await sleep(300);
+        expect(pretend.exitCode === null && pretend.signalCode === null && await js(`Boolean(document.querySelector('#bottom .stop'))`), 'Cancel stopped the game');
+        await js(`document.querySelector('#bottom .stop').click()`);
+        await waitFor(`!document.querySelector('#overlay').hidden`, 'stop warning again');
+        await js(`document.querySelector('#overlay input[type=checkbox]').click()`);
+        await press('Stop the Game');
         await waitFor(`!document.querySelector('#bottom .stop') && document.querySelector('#bottom .btn.play').textContent === 'Play'`, 'Play button back after stopping');
         expect(pretend.exitCode !== null || pretend.signalCode !== null, 'the game process was not ended');
         expect((await call('instances.stop', { id: twoInst.id })).code === 'NOT_RUNNING', 'stopping a closed game did not say so');
+        // The choice was remembered: no warning the next time, and Settings can bring it back.
+        await waitFor(`S.cfg.skipStopWarning === true`, 'remembered choice');
+        await js(`document.querySelector('#bottom .btn.play').click()`);
+        await waitFor(`document.querySelector('#bottom .stop')`, 'running again');
+        await js(`document.querySelector('#bottom .stop').click()`);
+        await waitFor(`!document.querySelector('#bottom .stop')`, 'stopped without a warning');
+        expect(await js(`document.querySelector('#overlay').hidden`), 'the warning came back although it was switched off');
+        await js(`go('settings')`);
+        await waitFor(`[...document.querySelectorAll('.settings .btn')].some(b => b.textContent === 'Warn Me Again')`, 'the setting that brings the warning back');
+        await shot('15d-stop-warning-setting');
+        await js(`[...document.querySelectorAll('.settings .btn')].find(b => b.textContent === 'Warn Me Again').click()`);
+        await waitFor(`S.cfg.skipStopWarning === false && ![...document.querySelectorAll('.settings .btn')].some(b => b.textContent === 'Warn Me Again')`, 'warning switched back on');
         await js(`go('browse')`);
       } finally {
         gameMod.launch = realLaunch;
@@ -651,6 +677,16 @@ require('../main.js').ready.then(async (win) => {
       expect(mods.includes('blocked-a.jar') && mods.includes('blocked-b.jar') && mods.length === 3, `mods folder: ${mods.join()}`);
       expect(!(await js(`S.cfg.instances.find(i => i.id === '${inst.id}').leftOut`)), 'installed files stayed on the left-out list');
       await shot('24-left-out-done');
+      // The fetched files carry their project's name and icon, not the file's.
+      await js(`window.modion.call('instances.setActive', { id: '${inst.id}' })`);
+      const fetched = async () => (await js(`window.modion.call('library.list', { type: 'mod' })`)).data.files.filter((f) => /^blocked-/.test(f.file));
+      const got = await fetched();
+      expect(got.length === 2 && got.every((f) => f.meta && /^project \d0$/.test(f.meta.title) && f.meta.icon === 'https://example.com/logo.png'), `website files in the library: ${JSON.stringify(got)}`);
+      // Files recorded before this was done are asked about once and corrected.
+      const old = { source: 'curseforge', projectId: '20', title: 'blocked-a', icon: null };
+      let saved = 0;
+      await require('../src/content.js').nameAdopted({ store: { saveManifest: () => saved++ }, sources: { curseforge: cf } }, [old]);
+      expect(old.title === 'project 20' && old.icon && old.briefed && saved === 1, `an old record was not corrected: ${JSON.stringify(old)}`);
       await js(`closeScreen()`);
 
       // Skipping keeps the file on the list, and the instance row offers it again.
@@ -677,16 +713,6 @@ require('../main.js').ready.then(async (win) => {
 
   await step('files only CurseForge knows are named in the library', async () => {
     const cf = require('../src/curseforge');
-      // The fetched files carry their project's name and icon, not the file's.
-      await js(`window.modion.call('instances.setActive', { id: '${inst.id}' })`);
-      const fetched = async () => (await js(`window.modion.call('library.list', { type: 'mod' })`)).data.files.filter((f) => /^blocked-/.test(f.file));
-      const got = await fetched();
-      expect(got.length === 2 && got.every((f) => f.meta && /^project \d0$/.test(f.meta.title) && f.meta.icon === 'https://example.com/logo.png'), `website files in the library: ${JSON.stringify(got)}`);
-      // Files recorded before this was done are asked about once and corrected.
-      const old = { source: 'curseforge', projectId: '20', title: 'blocked-a', icon: null };
-      let saved = 0;
-      await require('../src/content.js').nameAdopted({ store: { saveManifest: () => saved++ }, sources: { curseforge: cf } }, [old]);
-      expect(old.title === 'project 20' && old.icon && old.briefed && saved === 1, `an old record was not corrected: ${JSON.stringify(old)}`);
     const real = { hasKey: cf.hasKey, identify: cf.identify, fingerprints: cf.fingerprints };
     let asked = 0;
     cf.hasKey = () => true;

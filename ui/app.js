@@ -484,6 +484,21 @@ function renderBottom() {
     const playing = btn('Playing', null, 'green play playing');
     playing.disabled = true;
     const stop = h('button', { class: 'stop', title: `Stop ${inst.name}`, ariaLabel: `Stop ${inst.name}`, onclick: async () => {
+      if (!S.cfg.skipStopWarning) {
+        const remember = check('Do not warn me again', false, () => {});
+        const yes = await new Promise((resolve) => {
+          let answer = false;
+          showScreen(`Stop ${inst.name}?`,
+            h('div', { class: 'screen-body' }, h('div', { class: 'confirm' },
+              h('p', {}, 'The game is closed at once. Any unsaved progress in it will be lost.'),
+              h('p', { class: 'dim' }, 'To keep your progress, leave the world from inside the game instead.'),
+              h('p', {}, remember))),
+            [btn('Cancel', closeScreen), btn('Stop the Game', () => { answer = true; closeScreen(); }, 'red')],
+            () => resolve(answer));
+        });
+        if (!yes) return;
+        if (remember.querySelector('input').checked) api('settings.setSkipStopWarning', { on: true }).then(setConfig).catch(() => {});
+      }
       stop.disabled = true;
       try {
         await api('instances.stop', { id: inst.id });
@@ -1233,6 +1248,9 @@ function viewSettings(v) {
       h('p', {}, modeNote),
       h('div', { class: 'bar' }, check('Show the game log when the game is started', S.cfg.openLogOnLaunch !== false,
         (on) => act(api('settings.setOpenLog', { on }), 'Setting not saved'))),
+      S.cfg.skipStopWarning && h('div', { class: 'bar' },
+        h('span', {}, 'Stopping a running game no longer warns about unsaved progress.'),
+        btn('Warn Me Again', () => act(api('settings.setSkipStopWarning', { on: false }), 'Setting not saved'))),
       h('p', { class: 'label' }, 'Starting directly works for vanilla, Fabric, Quilt, Forge and NeoForge, back to Minecraft 1.0 where the loader exists for that version. The line under the Play button says how the selected instance will be started.')),
     h('div', { class: 'panel' },
       h('h2', {}, 'Instance libraries'),

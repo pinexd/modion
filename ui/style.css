@@ -78,9 +78,11 @@ button { font: inherit; color: inherit; }
 .btn.play { min-width: 240px; padding: 12px 40px; font-size: 20px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 
 .btn.green.playing:disabled { color: #dcdcdc; background: #3f6351; box-shadow: inset 0 2px #6f9a7c, inset 0 -2px #2c4136; border-color: #1e1e1f; text-shadow: 0 1px 0 rgba(0, 0, 0, .35); }
-/* The red button that ends a running game sits beside Play without moving it off centre. */
-.play-wrap { position: relative; display: flex; }
-.stop { position: absolute; left: 100%; top: 0; bottom: 0; margin-left: 10px; aspect-ratio: 1; padding: 0; background: #c62f2f; border: 1px solid #1e1e1f; box-shadow: inset 0 2px #ef6a6a, inset 0 -2px #7d1717; cursor: pointer; outline: none; }
+/* The red button that ends a running game; the pair is centred together. */
+.btn.red { background: #c62f2f; box-shadow: inset 0 2px #ef6a6a, inset 0 -2px #7d1717; text-shadow: 0 1px 0 rgba(0, 0, 0, .35); }
+.btn.red:hover:not(:disabled) { background: #dc4040; }
+.play-wrap { display: flex; gap: 10px; }
+.stop { position: relative; flex: none; width: 54px; padding: 0; background: #c62f2f; border: 1px solid #1e1e1f; box-shadow: inset 0 2px #ef6a6a, inset 0 -2px #7d1717; cursor: pointer; outline: none; }
 .stop::before, .stop::after { content: ''; position: absolute; left: 50%; top: 50%; width: 22px; height: 4px; margin: -2px 0 0 -11px; background: #fff; transform: rotate(45deg); }
 .stop::after { transform: rotate(-45deg); }
 .stop:hover:not(:disabled) { background: #dc4040; }
