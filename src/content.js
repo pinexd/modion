@@ -480,21 +480,28 @@ async function saveTo({ sources }, req, destDir, emit) {
 // Files taken over from the website before Modion asked for the project's details were
 // recorded under the file's name and without an icon. Asks once per file and fills them in.
 async function nameAdopted({ store, sources }, found) {
-  const todo = found.filter((e) => !e.unknown && e.projectId && !e.icon && !e.briefed && sources && sources[e.source] && typeof sources[e.source].brief === 'function'
-    && (e.source !== 'curseforge' || sources.curseforge.hasKey()));
+  const can = (name) => Boolean(sources && sources[name] && typeof sources[name].brief === 'function' && (name !== 'curseforge' || sources.curseforge.hasKey()));
+  // The project's own site is asked first; the same project on the other site will do as well.
+  const places = (e) => [[e.source, e.projectId], ...Object.entries(e.also || {})].filter(([name, pid]) => pid && can(name));
+  const todo = found.filter((e) => !e.unknown && e.projectId && !e.icon && !e.briefed && places(e).length);
   if (!todo.length) return;
-  let next = 0;
+  let next = 0, changed = false;
   await Promise.all(Array.from({ length: Math.min(6, todo.length) }, async () => {
     while (next < todo.length) {
       const e = todo[next++];
-      const meta = await sources[e.source].brief(String(e.projectId)).catch(() => null);
+      let meta = null;
+      for (const [name, pid] of places(e)) {
+        meta = await sources[name].brief(String(pid)).catch(() => null);
+        if (meta) break;
+      }
       if (!meta) continue; // offline or refused: try again next time
       if (meta.icon) e.icon = meta.icon;
       if (meta.title) e.title = meta.title; // what was recorded is the file's own name
       e.briefed = true;
+      changed = true;
     }
   }));
-  store.saveManifest();
+  if (changed) store.saveManifest();
 }
 
 async function list(ctx, type) {
