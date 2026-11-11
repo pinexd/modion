@@ -7,8 +7,10 @@ const BASE = 'https://api.curseforge.com/v1';
 const GAME = 432; // Minecraft
 const PAGE = 20;
 const MAX_INDEX = 10000; // the API refuses index + pageSize beyond this
-const CLASS = { mod: 6, resourcepack: 12, shader: 6552, datapack: 6945 };
-const CLASS_SLUG = { mod: 'mc-mods', resourcepack: 'texture-packs', shader: 'shaders', datapack: 'data-packs' };
+const CLASS = { mod: 6, resourcepack: 12, shader: 6552, datapack: 6945, modpack: 4471 };
+const CLASS_SLUG = { mod: 'mc-mods', resourcepack: 'texture-packs', shader: 'shaders', datapack: 'data-packs', modpack: 'modpacks' };
+// Mods and modpacks are made for a mod loader; the other kinds are not.
+const hasLoader = (type) => type === 'mod' || type === 'modpack';
 const LOADER = { forge: 1, fabric: 4, quilt: 5, neoforge: 6 };
 const LOADER_NAMES = Object.keys(LOADER);
 const SORT = { downloads: 6, updated: 3, newest: 11 };
@@ -107,7 +109,7 @@ async function search({ type = 'mod', query = '', gameVersion, loader, category,
     searchFilter: query,
     categoryId: /^\d+$/.test(category || '') ? category : undefined,
     gameVersion,
-    modLoaderType: type === 'mod' && loader ? LOADER[loader] : undefined,
+    modLoaderType: hasLoader(type) && loader ? LOADER[loader] : undefined,
     sortField: SORT[sort] || (query ? undefined : 2),
     sortOrder: 'desc',
     index,
@@ -144,7 +146,7 @@ async function project(id) {
 async function versions(id, { type, gameVersion, loader } = {}) {
   const res = await cf(`/mods/${encodeURIComponent(id)}/files`, {
     gameVersion,
-    modLoaderType: type === 'mod' && loader ? LOADER[loader] : undefined,
+    modLoaderType: hasLoader(type) && loader ? LOADER[loader] : undefined,
     pageSize: 50,
   });
   return arr(res.data).map(normFile);

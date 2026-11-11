@@ -25,6 +25,8 @@ const webinstall = require('./src/webinstall');
 const INDEX = path.join(__dirname, 'ui', 'index.html');
 const sources = { modrinth, curseforge };
 const TYPES = Object.keys(content.FOLDER);
+// What can be browsed: the kinds of content that go into an instance, and modpacks, which become one.
+const BROWSE_TYPES = [...TYPES, 'modpack'];
 const LOADERS = ['', 'fabric', 'forge', 'neoforge', 'quilt'];
 const SORTS = ['relevance', 'downloads', 'updated', 'newest'];
 // Used by dev/smoke.js: render without putting a window on screen.
@@ -75,7 +77,7 @@ function contentType(v) {
 }
 
 const filter = (a) => ({
-  type: oneOf(a.type, TYPES, 'mod'),
+  type: oneOf(a.type, BROWSE_TYPES, 'mod'),
   gameVersion: text(a.gameVersion, 32),
   loader: oneOf(a.loader, LOADERS, ''),
 });
@@ -284,6 +286,33 @@ function migrateData() {
   store.saveConfig();
 }
 
+// Makes a new instance from a modpack file: reads what it needs, creates the instance,
+// downloads the pack's files into it and copies the pack's own folders over.
+async function importPack(file, fallbackName) {
+  const pack = modpack.inspect(file);
+  let made = null;
+  const job = { id: crypto.randomUUID(), title: pack.name, filename: pack.name, saved: true };
+  try {
+    const spec = { name: text(pack.name, 80) || fallbackName || '', gameVersion: text(pack.gameVersion, 32), loader: oneOf(pack.loader, LOADERS, ''), loaderVersion: text(pack.loaderVersion, 40) };
+    // Checked before any folder is made, so a pack that cannot be fetched leaves nothing behind.
+    if (pack.kind === 'curseforge' && pack.files.length && !curseforge.hasKey()) {
+      throw new ApiError('Importing a CurseForge modpack needs your CurseForge API key. Add it in Settings first.', 'NO_CF_KEY');
+    }
+    made = await makeInstance(spec);
+    const { items, skipped } = await modpack.downloads(pack, made.path, curseforge);
+    await game.fetchAll(items, (received, total) => emit({ ...job, state: 'progress', received, total }));
+    const copied = await modpack.unpackOverrides(pack, made.path);
+    const inst = adopt(made, spec);
+    return { config: publicConfig(), name: inst.name, files: items.length, copied, skipped };
+  } catch (e) {
+    if (made) fs.rmSync(made.home, { recursive: true, force: true }); // only the folder created just above
+    throw e;
+  } finally {
+    pack.zip.close();
+    emit({ ...job, state: 'done' });
+  }
+}
+
 function forget(idValue, { keepRecords } = {}) {
   store.config.instances = store.config.instances.filter((i) => i.id !== idValue);
   if (!keepRecords) delete store.manifest[idValue];
@@ -424,7 +453,7 @@ const methods = {
   'account.signOut': () => { account.signOut(); return publicConfig(); },
 
   'meta.gameVersions': () => modrinth.gameVersions(),
-  'meta.categories': (a) => source(a.source).categories(oneOf(a.type, TYPES, 'mod')),
+  'meta.categories': (a) => source(a.source).categories(oneOf(a.type, BROWSE_TYPES, 'mod')),
 
   // For a file its author only offers on the website: show that page and wait for the
   // person to download the file there.
@@ -534,7 +563,7 @@ const methods = {
     return publicConfig();
   },
 
-  // Creates an instance from a Modrinth .mrpack or a CurseForge modpack zip.
+  // Creates an instance from a Modrinth .mrpack or a CurseForge modpack zip on this computer.
   'instances.import': async () => {
     const pick = await dialog.showOpenDialog(liveWindow(), {
       title: 'Import a modpack',
@@ -542,27 +571,31 @@ const methods = {
       properties: ['openFile'],
     });
     if (pick.canceled || !pick.filePaths[0]) return null;
-    const pack = modpack.inspect(pick.filePaths[0]);
-    let made = null;
-    const job = { id: crypto.randomUUID(), title: pack.name, filename: pack.name, saved: true };
+    return importPack(pick.filePaths[0]);
+  },
+
+  // Downloads a modpack from Modrinth or CurseForge and makes a new instance out of it.
+  'modpack.install': async (a) => {
+    const src = source(a.source);
+    const projectId = id(a.projectId, 'project');
+    const v = a.versionId
+      ? await src.getVersion(projectId, id(a.versionId, 'file'))
+      : await src.latest(projectId, { type: 'modpack', gameVersion: text(a.gameVersion, 32), loader: oneOf(a.loader, LOADERS, '') });
+    if (!v) throw new ApiError('This modpack has no file for the chosen game version and loader.', 'NO_VERSION');
+    if (!v.file) {
+      throw new ApiError('The author only offers this modpack on the website. Download it there, then use "Import Modpack..." on the Instances page.', 'BLOCKED');
+    }
+    const dir = await fs.promises.mkdtemp(path.join(require('os').tmpdir(), 'modion-pack-'));
+    const job = { id: crypto.randomUUID(), title: text(a.title, 200) || v.name, filename: v.file.filename };
     try {
-      const spec = { name: text(pack.name, 80), gameVersion: text(pack.gameVersion, 32), loader: oneOf(pack.loader, LOADERS, ''), loaderVersion: text(pack.loaderVersion, 40) };
-      // Checked before any folder is made, so a pack that cannot be fetched leaves nothing behind.
-      if (pack.kind === 'curseforge' && pack.files.length && !curseforge.hasKey()) {
-        throw new ApiError('Importing a CurseForge modpack needs your CurseForge API key. Add it in Settings first.', 'NO_CF_KEY');
+      try {
+        await content.download(v.file, dir, (received, total) => emit({ ...job, state: 'progress', received, total }));
+      } finally {
+        emit({ ...job, state: 'done', saved: true });
       }
-      made = await makeInstance(spec);
-      const { items, skipped } = await modpack.downloads(pack, made.path, curseforge);
-      await game.fetchAll(items, (received, total) => emit({ ...job, state: 'progress', received, total }));
-      const copied = await modpack.unpackOverrides(pack, made.path);
-      const inst = adopt(made, spec);
-      return { config: publicConfig(), name: inst.name, files: items.length, copied, skipped };
-    } catch (e) {
-      if (made) fs.rmSync(made.home, { recursive: true, force: true }); // only the folder created just above
-      throw e;
+      return await importPack(path.join(dir, fs.readdirSync(dir)[0]), text(a.title, 80));
     } finally {
-      pack.zip.close();
-      emit({ ...job, state: 'done' });
+      fs.rmSync(dir, { recursive: true, force: true }); // only the temporary folder made just above
     }
   },
 

@@ -493,6 +493,34 @@ require('../main.js').ready.then(async (win) => {
     await js(`api('instances.setActive', { id: '${foreign}' }).then((c) => { setConfig(c); go('browse'); })`);
   });
 
+  await step('modpacks tab: listed first, mods still the default, a pack installs as a new instance', async () => {
+    await js(`go('browse')`);
+    await waitFor(`document.querySelectorAll('#top .tab').length === 5`, 'browse tabs');
+    expect(await js(`[...document.querySelectorAll('#top .tab')].map(t => t.textContent).join('|')`) === 'Modpacks|Mods|Resource Packs|Shaders|Data Packs', 'the tabs are not in the expected order');
+    expect(await js(`document.querySelector('#top .tab.on').textContent`) === 'Mods', 'Mods is not the tab selected by default');
+    const before = await js(`({ v: S.browse.gameVersion, l: S.browse.loader, n: S.cfg.instances.length })`);
+    await js(`document.querySelector('#top .tab').click()`);
+    await waitFor(`S.browse.type === 'modpack' && S.browse.results && document.querySelectorAll('#results .row').length > 5`, 'modpack results');
+    expect(await js(`S.browse.gameVersion === '' && S.browse.loader === '' && !document.querySelector('.bar.warn')`), 'the modpack tab kept the instance filters or warned about them');
+    expect(await js(`S.browse.results.hits.every(h => h.type === 'modpack')`), 'something other than modpacks was listed');
+    await shot('20-modpacks');
+    // Install a small, known pack by its files tab request (the same call the buttons make).
+    const pack = await js(`api('search', { source: 'modrinth', type: 'modpack', query: 'Fabulously Optimized', sort: 'relevance' }).then(r => r.hits[0])`);
+    expect(pack && /Fabulously/.test(pack.title), `pack search: ${JSON.stringify(pack).slice(0, 120)}`);
+    await js(`doPackInstall({ source: 'modrinth', projectId: '${pack.id}', type: 'modpack', title: 'Fabulously Optimized', gameVersion: '1.20.1', loader: 'fabric' })`);
+    await waitFor(`S.cfg.instances.length === ${before.n + 1} && !busy.size`, 'pack instance', 240000);
+    const made = await js(`S.cfg.instances[S.cfg.instances.length - 1]`);
+    expect(made.gameVersion === '1.20.1' && made.loader === 'fabric' && made.managed && made.id === await js(`S.cfg.activeInstanceId`), `pack instance: ${JSON.stringify(made).slice(0, 200)}`);
+    expect(fs.readdirSync(path.join(made.path, 'mods')).filter((f) => f.endsWith('.jar')).length > 5, 'the pack\'s mods were not downloaded');
+    expect(!fs.readdirSync(os.tmpdir()).some((n) => n.startsWith('modion-pack-')), 'the downloaded pack file was left behind');
+    // Leaving the tab brings the instance's filters back.
+    await js(`[...document.querySelectorAll('#top .tab')][1].click()`);
+    await waitFor(`S.browse.type === 'mod' && S.browse.gameVersion === '1.20.1' && S.browse.loader === 'fabric'`, 'filters to follow the new instance');
+    await js(`window.modion.call('instances.delete', { id: '${made.id}' })`);
+    await js(`api('config.get').then((c) => setConfig(c, { follow: true }))`);
+    await waitFor(`S.cfg.instances.length === ${before.n}`, 'cleanup');
+  });
+
   await step('instance settings: Java, memory slider, arguments and environment', async () => {
     await js(`go('instances')`);
     const id = await js(`S.cfg.instances[0].id`);

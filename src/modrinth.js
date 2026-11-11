@@ -45,6 +45,7 @@ async function search({ type = 'mod', query = '', gameVersion, loader, category,
   if (category) facets.push([`categories:${category}`]);
   if (gameVersion) facets.push([`versions:${gameVersion}`]);
   if (loader && type === 'mod') facets.push(accepted(loader).map((l) => `categories:${l}`));
+  if (loader && type === 'modpack') facets.push([`categories:${loader}`]); // a pack is built for one loader exactly
   const data = await getJson(
     `${BASE}/search?${q({ query, facets, index: SORT[sort] || 'relevance', offset: page * PAGE, limit: PAGE })}`
   );
@@ -110,6 +111,7 @@ async function project(id) {
 function loaderFilter(type, loader) {
   if (type === 'datapack') return ['datapack'];
   if (type === 'mod' && loader) return accepted(loader);
+  if (type === 'modpack' && loader) return [loader];
   return undefined;
 }
 

@@ -91,6 +91,9 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
   switched off.
 - **Browse** – pick Modrinth or CurseForge in the sidebar, a content type in the tabs. Results
   are filtered to the active instance's version and loader.
+- **Modpacks** – the first tab on the Modrinth and CurseForge pages (Mods is still the one
+  that opens). Installing a modpack creates a new instance from it; the version and loader
+  filters there are your own choice, not the selected instance's.
 - **Project page** – description, gallery and file list. *Install* takes the newest file that
   fits the instance and pulls in required dependencies; the *Files* tab installs a specific one.
 - **Library** – what is in the instance, including files Modion did not install (identified

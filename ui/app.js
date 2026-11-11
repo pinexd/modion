@@ -38,6 +38,8 @@ async function api(method, args) {
 
 const SOURCES = { modrinth: 'Modrinth', curseforge: 'CurseForge' };
 const TYPES = { mod: 'Mods', resourcepack: 'Resource Packs', shader: 'Shaders', datapack: 'Data Packs' };
+// What the Modrinth and CurseForge pages offer: modpacks first, then what goes into an instance.
+const BROWSE_TYPES = { modpack: 'Modpacks', ...TYPES };
 const LOADERS = { '': 'Any loader', fabric: 'Fabric', forge: 'Forge', neoforge: 'NeoForge', quilt: 'Quilt' };
 const SORTS = { relevance: 'Relevance', downloads: 'Downloads', updated: 'Recently updated', newest: 'Newest' };
 
@@ -111,10 +113,22 @@ function invalidateResults(patch) {
   searchToken++;
 }
 
+// Switching between kinds of content. A modpack becomes an instance of its own, so the
+// selected instance says nothing about which packs fit: the version and loader filters
+// start out open there, and go back to the instance's when leaving.
+function browseType(type) {
+  if (type === 'modpack') invalidateResults({ type, category: '', gameVersion: '', loader: '' });
+  else {
+    const was = S.browse.type;
+    invalidateResults({ type, category: '' });
+    if (was === 'modpack') followInstance();
+  }
+}
+
 // Browsing follows the active instance: its game version and loader become the filters.
 function followInstance() {
   const inst = activeInst();
-  if (!inst) return;
+  if (!inst || S.browse.type === 'modpack') return;
   invalidateResults({
     gameVersion: inst.gameVersion || S.browse.gameVersion,
     loader: inst.loader || S.browse.loader,
@@ -307,11 +321,11 @@ function renderRail() {
 // Header: section name with the launcher's uppercase tab strip underneath.
 function renderTop() {
   const tab = (label, on, onclick) => h('button', { class: `tab ${on ? 'on' : ''}`, onclick }, label);
-  const typeTabs = (current, pick) => Object.entries(TYPES).map(([id, name]) => tab(name, current === id, () => pick(id)));
+  const typeTabs = (current, pick, types = TYPES) => Object.entries(types).map(([id, name]) => tab(name, current === id, () => pick(id)));
   let title, tabs, back = null;
   if (S.view === 'browse') {
     title = SOURCES[S.browse.source];
-    tabs = typeTabs(S.browse.type, (type) => { if (type !== S.browse.type) invalidateResults({ type, category: '' }); render(); });
+    tabs = typeTabs(S.browse.type, (type) => { if (type !== S.browse.type) browseType(type); render(); }, BROWSE_TYPES);
   } else if (S.view === 'library') {
     const inst = activeInst();
     title = inst ? `Library / ${inst.name}` : 'Library';
@@ -346,10 +360,12 @@ function renderBottom() {
     h('span', { class: 'caret' }));
   let action = h('div');
   if (S.view === 'project') {
-    const p = S.project.hit, t = installTarget();
-    const play = installButton({ source: p.source, projectId: p.id, type: p.type, title: p.title, icon: p.icon, ...t }, 'play');
+    const p = S.project.hit, t = installRequest(p);
+    const play = installButton(t, 'play', installRun(p));
     action = h('div', { class: 'action' }, play,
-      h('div', { class: 'faint small' }, targetLabel(t) ? `Latest file for ${targetLabel(t)}` : 'Latest file'));
+      h('div', { class: 'faint small' }, p.type === 'modpack'
+        ? `Creates a new instance${targetLabel(t) ? ` (latest for ${targetLabel(t)})` : ''}`
+        : targetLabel(t) ? `Latest file for ${targetLabel(t)}` : 'Latest file'));
   } else if (inst && inst.launch) {
     // Outside a project page the middle of the bar is the launcher's Play button.
     const label = inst.launch.play ? 'Play' : 'Open Launcher';
@@ -394,7 +410,8 @@ function navMove(step) {
   nav.at += step;
   nav.moving = true;
   try {
-    if (to.source !== S.browse.source || to.btype !== S.browse.type) invalidateResults({ source: to.source, type: to.btype, category: '' });
+    if (to.source !== S.browse.source) invalidateResults({ source: to.source, category: '' });
+    if (to.btype !== S.browse.type) browseType(to.btype);
     S.library.type = to.ltype;
     if (to.project) S.project = to.project;
     S.view = to.view;
@@ -462,6 +479,37 @@ function installButton(req, cls, { label, run = doInstall } = {}) {
   return b;
 }
 
+// A modpack is installed as a new instance: Modion downloads the pack, creates the
+// instance it describes and fills it.
+async function doPackInstall(req) {
+  const key = `${req.source}:${req.projectId}`;
+  if (busy.has(key)) return;
+  busy.add(key);
+  paintInstalls();
+  try {
+    const r = await api('modpack.install', req);
+    setConfig(r.config, { follow: true });
+    toast('Modpack installed', `${r.name} is a new instance with ${r.files} file${r.files === 1 ? '' : 's'}. It is now selected.`, { time: 9000 });
+    const left = Array.isArray(r.skipped) ? r.skipped : [];
+    for (const sk of left.slice(0, 4)) toast('Left out of the pack', `${sk.title}: ${sk.reason}`, { tone: 'gold', time: 12000 });
+    if (left.length > 4) toast('Left out of the pack', `...and ${left.length - 4} more files.`, { tone: 'gold', time: 12000 });
+    renderBottom();
+  } catch (e) {
+    fail(e, 'Modpack not installed');
+  } finally {
+    busy.delete(key);
+    paintInstalls();
+  }
+}
+
+// What a project's Install button asks for: the pack tab goes by the filters on screen,
+// everything else by the selected instance.
+const installRequest = (p) => ({
+  source: p.source, projectId: p.id, type: p.type, title: p.title, icon: p.icon,
+  ...(p.type === 'modpack' ? { gameVersion: S.browse.gameVersion, loader: S.browse.loader } : installTarget()),
+});
+const installRun = (p) => (p.type === 'modpack' ? { run: doPackInstall } : {});
+
 async function doInstall(req) {
   if (!activeInst()) {
     toast('No instance selected', 'Choose where mods should be installed.');
@@ -522,7 +570,7 @@ function tags(p, max = 6) {
 }
 
 function hitRow(p) {
-  const install = installButton({ source: p.source, projectId: p.id, type: p.type, title: p.title, icon: p.icon, ...installTarget() }, 'small');
+  const install = installButton(installRequest(p), 'small', installRun(p));
   const open = () => openProject(p, 'browse');
   return h('div', { class: 'row click', tabIndex: 0, onclick: open, onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) open(); } },
     slot(p.icon, 64),
@@ -603,7 +651,7 @@ function viewBrowse(v) {
   const change = (patch) => { invalidateResults(patch); render(); };
   const search = h('input', {
     class: 'field grow', type: 'search', value: b.query, spellcheck: false, maxLength: 200,
-    placeholder: `Search ${TYPES[b.type].toLowerCase()} on ${SOURCES[b.source]}...`,
+    placeholder: `Search ${BROWSE_TYPES[b.type].toLowerCase()} on ${SOURCES[b.source]}...`,
     oninput: () => {
       b.query = search.value;
       clearTimeout(searchTimer);
@@ -624,12 +672,12 @@ function viewBrowse(v) {
   }
   // Browsing for a different version or loader than the selected instance is allowed, but flagged.
   const inst = activeInst();
-  const mismatch = inst && ((inst.gameVersion && b.gameVersion !== inst.gameVersion) || (b.type === 'mod' && inst.loader && b.loader !== inst.loader));
+  const mismatch = inst && b.type !== 'modpack' && ((inst.gameVersion && b.gameVersion !== inst.gameVersion) || (b.type === 'mod' && inst.loader && b.loader !== inst.loader));
   add(v, h('div', { class: 'bar' },
       search,
       category,
       versionSelect(b.gameVersion, 'Any version', (gameVersion) => change({ gameVersion })),
-      b.type === 'mod' && select(Object.entries(LOADERS), b.loader, (loader) => change({ loader })),
+      (b.type === 'mod' || b.type === 'modpack') && select(Object.entries(LOADERS), b.loader, (loader) => change({ loader })),
       select(Object.entries(SORTS), b.sort, (sort) => change({ sort }))),
     mismatch && h('div', { class: 'bar warn' },
       h('span', {}, `These filters do not match "${inst.name}" (${instLabel(inst)}). What is listed here may have no file that works in that instance.`),
@@ -641,10 +689,14 @@ function viewBrowse(v) {
 
 /* ---------- project page ---------- */
 
+// Which game version and loader a project's files should fit: the filters on screen for a
+// modpack (it becomes its own instance), the selected instance for everything else.
+const fitFor = (p) => (p.type === 'modpack' ? { gameVersion: S.browse.gameVersion, loader: S.browse.loader } : installTarget());
+
 function openProject(hit, from) {
   if (!hit || !hit.id || !SOURCES[hit.source]) return;
   if (S.view === 'browse') S.browse.scroll = ($('#results') || {}).scrollTop || 0;
-  const target = installTarget();
+  const target = fitFor(hit);
   S.project = { hit, from, tab: 'description', detail: null, versions: null, wanted: null, error: null, compatible: Boolean(target.gameVersion || target.loader) };
   S.view = 'project';
   render();
@@ -669,10 +721,11 @@ async function loadVersions(P, d, wanted, filter) {
 }
 
 function versionRow(d, v) {
-  const req = { source: d.source, projectId: d.id, versionId: v.id, type: d.type, title: d.title, icon: d.icon, ...installTarget() };
+  const pack = d.type === 'modpack';
+  const req = { source: d.source, projectId: d.id, versionId: v.id, type: d.type, title: d.title, icon: d.icon, ...(pack ? {} : installTarget()) };
   let actions;
   if (v.file) {
-    const install = installButton(req, 'small');
+    const install = installButton(req, 'small', pack ? { run: doPackInstall } : {});
     const save = btn('Save As...', async () => {
       save.disabled = true; // one folder dialog at a time
       try {
@@ -682,6 +735,12 @@ function versionRow(d, v) {
       save.disabled = false;
     }, 'small');
     actions = [install, save];
+  } else if (pack) {
+    // A pack the author keeps to the website: download it there and import the file.
+    actions = [btn('Open Website', () => {
+      toast('Only on the website', 'Download the pack there, then use "Import Modpack..." on the Instances page.', { time: 10000 });
+      api('openExternal', { url: d.url }).catch(fail);
+    }, 'small')];
   } else {
     actions = [installButton(req, 'small', { label: 'Get from Website', run: doWebInstall })];
   }
@@ -701,7 +760,7 @@ function viewProject(v) {
   const d = { ...P.hit, ...(P.detail || {}) };
   if (!d.author) d.author = P.hit.author;
   if (P.hit.type) d.type = P.hit.type;
-  const t = installTarget();
+  const t = fitFor(d);
   if (P.tab === 'versions' && P.detail) {
     const wanted = P.compatible ? `${t.gameVersion}/${t.loader}` : 'all';
     if (P.wanted !== wanted) {
