@@ -92,6 +92,8 @@ const loading = (text = 'Loading...') => message(h('p', { class: 'dim' }, text))
 
 /* ---------- state ---------- */
 
+let signingIn = false; // a Microsoft sign-in is waiting on the browser
+
 const S = {
   cfg: { instances: [], activeInstanceId: null, hasCurseforgeKey: false, installed: {}, version: '' },
   gameVersions: [],
@@ -366,6 +368,21 @@ function renderBottom() {
       h('div', { class: 'faint small' }, p.type === 'modpack'
         ? `Creates a new instance${targetLabel(t) ? ` (latest for ${targetLabel(t)})` : ''}`
         : targetLabel(t) ? `Latest file for ${targetLabel(t)}` : 'Latest file'));
+  } else if (inst && inst.launch && inst.launch.signIn) {
+    // Modion starts the game with the Microsoft account, and nobody is signed in yet.
+    const signIn = btn(signingIn ? 'Cancel Sign-in' : 'Sign In', async () => {
+      if (signingIn) { api('account.cancel').catch(() => {}); return; }
+      signingIn = true;
+      renderBottom();
+      try {
+        setConfig(await api('account.signIn'));
+        toast('Signed in', S.cfg.account ? `Welcome, ${S.cfg.account.name}.` : 'You can play now.');
+      } catch (e) { if (e.code !== 'CANCELLED') fail(e, 'Sign-in failed'); }
+      signingIn = false;
+      render();
+    }, 'green play');
+    action = h('div', { class: 'action' }, signIn,
+      h('div', { class: 'faint small' }, signingIn ? 'Finish signing in in your web browser' : inst.launch.label));
   } else if (inst && inst.launch) {
     // Outside a project page the middle of the bar is the launcher's Play button.
     const label = inst.launch.play ? 'Play' : 'Open Launcher';
@@ -949,7 +966,6 @@ function viewLibrary(v) {
 
 /* ---------- settings ---------- */
 
-let signingIn = false; // a Microsoft sign-in is waiting on the browser
 
 function viewSettings(v) {
   const key = h('input', { class: 'field', type: 'password', placeholder: S.cfg.ownCurseforgeKey ? 'A key is saved. Paste a new one to replace it.' : 'Paste your CurseForge API key', spellcheck: false, autocomplete: 'off' });
@@ -987,7 +1003,7 @@ function viewSettings(v) {
       : btn('Sign In with Microsoft', () => { signingIn = true; render(); act(api('account.signIn'), 'Sign-in failed'); }, 'green');
 
   // How Play starts the game.
-  const mode = S.cfg.launchMode || 'prism';
+  const mode = S.cfg.launchMode || 'account';
   const setLaunch = (patch) => act(api('settings.setLaunch', { mode, offlineName: S.cfg.offlineName || '', ...patch }), 'Setting not saved');
   const modes = [['prism', 'Through Prism Launcher'], ['account', 'Directly, with my Microsoft account']];
   if (S.cfg.offlineAllowed) modes.push(['offline', 'Directly, offline (this developer machine only)']);
@@ -995,7 +1011,7 @@ function viewSettings(v) {
   const modeNote = mode === 'prism'
     ? 'Play hands the instance to Prism Launcher, or opens the launcher that owns it.'
     : mode === 'account'
-      ? (who ? `Play starts the game as ${who.name}.` : 'Not signed in yet, so Play still goes through Prism Launcher. Sign in below.')
+      ? (who ? `Play starts the game as ${who.name}.` : 'Not signed in yet: the Play button is a Sign In button until you are.')
       : (/^\w{3,16}$/.test(S.cfg.offlineName || '') ? `Play starts the game offline as ${S.cfg.offlineName}. Online servers will refuse an offline player.` : 'Enter a player name (3 to 16 letters, digits or underscores) to use offline mode.');
 
   const checkNow = btn('Check Now', async () => {
@@ -1359,7 +1375,7 @@ function viewInstances(v) {
         h('div', { class: 'row-title' }, i.name, h('span', { class: 'gold' }, `  ${instLabel(i)}`),
           h('span', { class: 'faint' }, `  ${i.movable ? 'made by Modion' : i.managed ? 'made by Modion, in Prism Launcher' : 'added from elsewhere'}`)),
         h('div', { class: 'faint path' }, '\u200e' + i.path),
-        h('div', { class: 'faint row-title' }, i.launch ? `${i.launch.play ? 'Play' : 'Open'}: ${i.launch.label}` : 'Play is not available for this instance with the current launch setting')),
+        h('div', { class: 'faint row-title' }, i.launch ? (i.launch.signIn ? i.launch.label : `${i.launch.play ? 'Play' : 'Open'}: ${i.launch.label}`) : 'Play is not available for this instance with the current launch setting')),
       h('div', { class: 'row-actions' },
         select,
         btn('Open Folder', () => api('instances.openFolder', { id: i.id }).catch(fail), 'small'),

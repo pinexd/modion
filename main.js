@@ -96,9 +96,9 @@ const offlineAllowed = (() => {
 })();
 const PLAYER_NAME = /^\w{3,16}$/;
 
-// What Play will do for this instance under the chosen setting. When the chosen way is
-// not possible (not signed in, say), it falls back to the launcher that owns the
-// instance, and the label always says which it will be.
+// What Play will do for this instance under the chosen setting. When Modion cannot start
+// the instance itself, it falls back to the launcher that owns it, and the label always
+// says which it will be. With the account setting and nobody signed in, it asks for that.
 function howToLaunch(inst) {
   const mode = store.config.launchMode;
   if (game.supports(inst)) {
@@ -106,6 +106,8 @@ function howToLaunch(inst) {
       return { direct: 'offline', play: true, label: `Modion, offline as ${store.config.offlineName}` };
     }
     if (mode === 'account' && account.status()) return { direct: 'account', play: true, label: `Modion as ${account.status().name}` };
+    // Not signed in yet: the Play button's place is taken by a Sign In button.
+    if (mode === 'account') return { direct: null, play: false, signIn: true, label: 'Sign in with Microsoft to play' };
   }
   const how = launcher.describe(inst.path);
   return how ? { direct: null, play: how.play, label: how.label } : null;
@@ -118,7 +120,7 @@ function publicConfig() {
     instances: list.map((i) => {
       const how = howToLaunch(i);
       // `movable`: an instance of Modion's own kind, which can be moved to another folder.
-      return { ...i, launch: how ? { play: how.play, label: how.label } : null, movable: Boolean(i.managed && libraries.isOwn(i.home)) };
+      return { ...i, launch: how ? { play: how.play, label: how.label, ...(how.signIn ? { signIn: true } : {}) } : null, movable: Boolean(i.managed && libraries.isOwn(i.home)) };
     }),
     canCreate: store.config.launchMode !== 'prism' || launcher.canCreate(),
     // Folders holding the instances Modion made itself; new ones go into the default one.
@@ -428,7 +430,7 @@ const methods = {
   },
 
   'settings.setLaunch': (a) => {
-    const mode = oneOf(a.mode, ['prism', 'account', 'offline'], 'prism');
+    const mode = oneOf(a.mode, ['prism', 'account', 'offline'], 'account');
     if (mode === 'offline' && !offlineAllowed) throw new ApiError('Offline launching is not available on this computer.', 'FORBIDDEN');
     const name = text(a.offlineName, 16);
     if (name && !PLAYER_NAME.test(name)) throw new ApiError('A player name is 3 to 16 letters, digits or underscores.', 'BAD_REQUEST');
@@ -773,6 +775,7 @@ const methods = {
     if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
     if (!instances.isDir(inst.path)) throw new ApiError(`The folder for "${inst.name}" no longer exists: ${inst.path}`, 'NO_FOLDER');
     const how = howToLaunch(inst);
+    if (how && how.signIn) throw new ApiError('Sign in with Microsoft first.', 'SIGNED_OUT');
     if (how && how.direct) {
       const session = how.direct === 'account' ? await account.gameSession(clientId()) : game.offlineSession(store.config.offlineName);
       await game.launch(inst, session, emit);

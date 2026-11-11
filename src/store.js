@@ -37,7 +37,8 @@ class Store {
       activeInstanceId: typeof config.activeInstanceId === 'string' ? config.activeInstanceId : null,
       curseforgeKey: typeof config.curseforgeKey === 'string' ? config.curseforgeKey : '',
       msClientId: typeof config.msClientId === 'string' ? config.msClientId : '',
-      launchMode: ['prism', 'account', 'offline'].includes(config.launchMode) ? config.launchMode : 'prism',
+      // How Play starts the game. Modion starting it itself, with the Microsoft account, is the default.
+      launchMode: ['prism', 'account', 'offline'].includes(config.launchMode) ? config.launchMode : 'account',
       openLogOnLaunch: config.openLogOnLaunch !== false, // on unless switched off
       checkUpdates: config.checkUpdates !== false,       // likewise
       offlineName: typeof config.offlineName === 'string' ? config.offlineName : '',

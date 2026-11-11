@@ -80,6 +80,13 @@ require('../main.js').ready.then(async (win) => {
   };
   const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
 
+  await step('starting the game with the Microsoft account is the default', async () => {
+    await waitFor(`S.cfg.version`, 'config');
+    expect(await js(`S.cfg.launchMode`) === 'account' && !(await js(`S.cfg.account`)), `default launch mode: ${await js(`S.cfg.launchMode`)}`);
+    // The rest of this suite was written around the Prism setting.
+    await js(`api('settings.setLaunch', { mode: 'prism', offlineName: '' }).then((c) => setConfig(c))`);
+  });
+
   await step('first run shows the instance picker with detected launchers', async () => {
     await waitFor(`!document.querySelector('#overlay').hidden && document.querySelectorAll('#overlay .list').length === 2`, 'detected list');
     await shot('01-instances');
@@ -342,8 +349,14 @@ require('../main.js').ready.then(async (win) => {
   await step('the launch setting decides what Play does, and says so', async () => {
     const label = () => js(`api('config.get').then((c) => (c.instances[0].launch || {}).label || 'none')`);
     const set = (args) => js(`window.modion.call('settings.setLaunch', ${JSON.stringify(args)}).then((r) => (r.ok ? 'OK' : r.code))`);
-    expect(await js(`S.cfg.launchMode`) === 'prism' && await label() === 'none', `default is not Prism: ${await label()}`);
-    expect(await set({ mode: 'account' }) === 'OK' && await label() === 'none', 'account mode without a sign-in must not start the game directly');
+    expect(await label() === 'none', `the Prism setting offered to start a folder Prism does not own: ${await label()}`);
+    // The account setting with nobody signed in: Sign In takes the place of Play, and nothing can be started.
+    expect(await set({ mode: 'account' }) === 'OK' && await label() === 'Sign in with Microsoft to play', `signed-out label: ${await label()}`);
+    await js(`api('config.get').then((c) => { setConfig(c); go('library'); })`);
+    await waitFor(`document.querySelector('#bottom .play') && document.querySelector('#bottom .play').textContent === 'Sign In'`, 'Sign In button');
+    await shot('13-sign-in');
+    const blocked = await js(`window.modion.call('instances.launch', { id: S.cfg.instances[0].id })`);
+    expect(blocked.code === 'SIGNED_OUT' && spawned.length === 1, 'the game could be started without signing in');
     if (await js(`S.cfg.offlineAllowed`)) {
       expect(await set({ mode: 'offline', offlineName: 'no' }) === 'BAD_REQUEST', 'a bad player name was accepted');
       expect(await set({ mode: 'offline', offlineName: '' }) === 'OK' && await label() === 'none', 'offline mode without a name must not start the game');
@@ -353,7 +366,8 @@ require('../main.js').ready.then(async (win) => {
     } else {
       expect(await set({ mode: 'offline', offlineName: 'Tester_1' }) === 'FORBIDDEN', 'offline mode is selectable on a machine that is not the developer\'s');
     }
-    expect(await set({ mode: 'nonsense' }) === 'OK' && await js(`api('config.get').then((c) => c.launchMode)`) === 'prism', 'an unknown mode did not fall back to Prism');
+    expect(await set({ mode: 'nonsense' }) === 'OK' && await js(`api('config.get').then((c) => c.launchMode)`) === 'account', 'an unknown mode did not fall back to the default');
+    await set({ mode: 'prism' });
     await js(`api('config.get').then((c) => { setConfig(c); go('browse'); })`);
   });
 

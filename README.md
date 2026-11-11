@@ -58,11 +58,12 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
 - **Instances** – the picker in the bottom-left. "Detect Launchers" finds game folders from
   the Minecraft Launcher, Prism Launcher / MultiMC / PolyMC and the Modrinth App (native or
   Flatpak), including their game version and mod loader. Any folder can be added by hand.
-- **New Instance / Play** – By default Modion leaves the game to Prism Launcher.
-  "New Instance..." writes a Prism Launcher instance (game version + Fabric, Quilt, Forge or
-  NeoForge), and the Play button in the bottom bar asks Prism to launch it, with the account
-  and Java that Prism already manages. Instances owned by other launchers get an
-  "Open Launcher" button instead.
+- **New Instance / Play** – By default Modion starts the game itself, with your Microsoft
+  account: until you are signed in, the Play button in the bottom bar is a **Sign In**
+  button, and new instances are kept in Modion's own folder. Settings can switch
+  "Starting the game" to Prism Launcher instead; then "New Instance..." writes a Prism
+  instance and Play asks Prism to launch it, with the account and Java Prism manages.
+  Instances Modion cannot start itself get the launcher that owns them: "Open Launcher".
 - **Instances page** – create an instance, import a modpack (Modrinth `.mrpack` or a
   CurseForge zip; the latter needs your CurseForge API key), and rename, delete or open the
   folder of instances Modion made. Instances added from other launchers can be selected and
