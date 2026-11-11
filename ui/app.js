@@ -939,6 +939,14 @@ function viewSettings(v) {
       ? (who ? `Play starts the game as ${who.name}.` : 'Not signed in yet, so Play still goes through Prism Launcher. Sign in below.')
       : (/^\w{3,16}$/.test(S.cfg.offlineName || '') ? `Play starts the game offline as ${S.cfg.offlineName}. Online servers will refuse an offline player.` : 'Enter a player name (3 to 16 letters, digits or underscores) to use offline mode.');
 
+  const checkNow = btn('Check Now', async () => {
+    checkNow.disabled = true;
+    checkNow.textContent = 'Checking...';
+    await checkForUpdate(true);
+    checkNow.disabled = false;
+    checkNow.textContent = 'Check Now';
+  });
+
   // Instance libraries: the folders Modion keeps its own instances in.
   const libs = Array.isArray(S.cfg.libraries) ? S.cfg.libraries : [];
   const libCall = async (button, method, args, done) => {
@@ -1001,6 +1009,13 @@ function viewSettings(v) {
         h('summary', { class: 'label' }, 'Use a different application ID'),
         h('p', { class: 'label' }, 'For developers: the client ID of your own Microsoft app registration, approved for the Minecraft API, with the redirect URI http://localhost under "Mobile and desktop applications". Leave empty to use Modion\'s own. Changing it signs you out.'),
         h('div', { class: 'bar' }, clientId, saveId))),
+    h('div', { class: 'panel' },
+      h('h2', {}, 'Updates'),
+      h('p', {}, `You have Modion ${S.cfg.version}.`, S.cfg.canSelfUpdate ? '' : ' This copy cannot update itself, so a new version is offered as a download.'),
+      h('div', { class: 'bar' }, check('Look for a new version when Modion starts', S.cfg.checkUpdates !== false,
+        (on) => act(api('settings.setCheckUpdates', { on }), 'Setting not saved'))),
+      h('div', { class: 'bar' }, checkNow),
+      h('p', { class: 'label' }, 'Modion asks GitHub for the project\'s list of releases; nothing about you or your computer is sent. Nothing is installed without asking.')),
     h('div', { class: 'panel' },
       h('h2', {}, 'CurseForge API key'),
       h('p', {}, 'Modrinth works out of the box. CurseForge only answers apps that send an API key, so browsing it needs your own (free) key from ',
@@ -1311,6 +1326,38 @@ function viewInstances(v) {
       h('p', { class: 'dim' }, 'Create a new instance, import a modpack (.mrpack or a CurseForge zip), or add a game folder you already have.'))));
 }
 
+/* ---------- updates ---------- */
+
+// Looks for a newer Modion and asks before doing anything. `manual` is the Check Now
+// button: it also reports "nothing new" and errors, which the check at start keeps quiet.
+async function checkForUpdate(manual) {
+  let found;
+  try { found = await api('update.check'); } catch (e) { if (manual) fail(e, 'Could not check for updates'); return; }
+  if (!found) { if (manual) toast('No update', `Modion ${S.cfg.version} is the newest version.`); return; }
+  // Never push another screen (the first-run instance picker, say) out of the way unasked.
+  if (!manual && !$('#overlay').hidden) { toast('Update available', `${found.name} is out. Open Settings to update.`, { time: 12000 }); return; }
+  const install = btn('Update and Restart', async () => {
+    install.disabled = true;
+    install.textContent = 'Updating...';
+    try {
+      await api('update.install');
+      toast('Updated', `Restarting into Modion ${found.version}...`);
+    } catch (e) {
+      fail(e, 'Update failed');
+      install.disabled = false;
+      install.textContent = 'Update and Restart';
+    }
+  }, 'green');
+  const page = btn(found.installable ? 'Release Page' : 'Open Download Page', () => api('openExternal', { url: found.page }).catch(fail), found.installable ? '' : 'green');
+  showScreen('Update available',
+    h('div', { class: 'screen-body' }, h('div', { class: 'confirm' },
+      h('p', {}, `${found.name} is available. You have Modion ${S.cfg.version}.`),
+      !found.installable && h('p', { class: 'dim' }, 'This copy of Modion cannot replace its own files (it runs from a source folder, or this release has no signed update package), so the new version has to be downloaded from the release page.'),
+      found.installable && h('p', { class: 'dim' }, 'The update is downloaded, checked against the project\'s release signature, and Modion restarts. Your settings, instances and game files are not touched.'),
+      found.notes && h('pre', { class: 'notes' }, found.notes))),
+    found.installable ? [btn('Later', closeScreen), page, install] : [btn('Later', closeScreen), page]);
+}
+
 /* ---------- start ---------- */
 
 (async function start() {
@@ -1320,4 +1367,5 @@ function viewInstances(v) {
   render();
   loadGameVersions();
   if (!S.cfg.instances.length) openInstances({ autoDetect: true });
+  if (S.cfg.checkUpdates) checkForUpdate(false);
 })();

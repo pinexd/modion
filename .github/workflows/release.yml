@@ -95,6 +95,18 @@ jobs:
           [ "$DRAFT" = "true" ] && args+=(--draft)
           [ "$PRERELEASE" = "true" ] && args+=(--prerelease)
           cd dist
+          # The update package is signed with the same key; Modion only installs an update
+          # whose signature matches the public key built into it.
+          if [ -n "$SIGNING_KEY_B64" ]; then
+            UKEY="$RUNNER_TEMP/update_signing_key"
+            (umask 077; printf '%s' "$SIGNING_KEY_B64" | base64 -d > "$UKEY"; echo >> "$UKEY")
+            ssh-keygen -q -Y sign -f "$UKEY" -n modion-update "modion-$V-app.zip"
+            rm -f "$UKEY"
+            extra=("modion-$V-app.zip.sig")
+          else
+            echo "::warning::No signing key: this release cannot be installed by Modion's self-update."
+            extra=()
+          fi
           assets=("modion-$V-linux-x64.tar.gz" "modion-$V-windows-x64-setup.exe" "modion-$V-windows-x64.zip" "modion-$V-app.zip")
           sha256sum "${assets[@]}" > SHA256SUMS.txt
-          gh release create "$TAG" "${assets[@]}" SHA256SUMS.txt "${args[@]}"
+          gh release create "$TAG" "${assets[@]}" "${extra[@]}" SHA256SUMS.txt "${args[@]}"

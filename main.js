@@ -14,6 +14,7 @@ const content = require('./src/content');
 const launcher = require('./src/launcher');
 const libraries = require('./src/libraries');
 const javas = require('./src/java');
+const updater = require('./src/updater');
 const { Account, GUID, CLIENT_ID } = require('./src/account');
 // The application ID used for sign-in: Modion's own, unless Settings names another.
 const clientId = () => store.config.msClientId || CLIENT_ID;
@@ -34,6 +35,7 @@ let store, win, account;
 const offered = new Set();
 // Likewise for Java programs: only ones found on this computer or picked in a dialog may be set.
 const offeredJava = new Set();
+let pendingUpdate = null; // what the last update check found
 
 const emit = (data) => {
   if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('download', data);
@@ -126,6 +128,9 @@ function publicConfig() {
     })),
     launchMode: store.config.launchMode,
     openLogOnLaunch: store.config.openLogOnLaunch,
+    checkUpdates: store.config.checkUpdates && !HEADLESS, // the tests do not go looking for releases
+    // Whether this copy can replace its own files; otherwise an update is a download from the release page.
+    canSelfUpdate: updater.canInstall(__dirname),
     offlineName: store.config.offlineName,
     offlineAllowed,
     msClientId: store.config.msClientId,
@@ -319,6 +324,34 @@ const methods = {
     store.config.curseforgeKey = next;
     store.saveConfig();
     return publicConfig();
+  },
+
+  'settings.setCheckUpdates': (a) => {
+    store.config.checkUpdates = a.on === true;
+    store.saveConfig();
+    return publicConfig();
+  },
+
+  // Is there a newer Modion? Answers { version, name, notes, page, installable } or null.
+  'update.check': async () => {
+    const found = await updater.check(require('./package.json').version);
+    pendingUpdate = found;
+    if (!found) return null;
+    return { version: found.version, name: found.name, notes: found.notes, page: found.page, installable: Boolean(found.payload) && updater.canInstall(__dirname) };
+  },
+
+  // Installs the update found by the last check, then restarts Modion.
+  'update.install': async () => {
+    if (!pendingUpdate) throw new ApiError('Check for updates first.', 'BAD_REQUEST');
+    if (!updater.canInstall(__dirname)) throw new ApiError('This copy of Modion cannot update itself. Download the new version from the release page.', 'NOT_INSTALLABLE');
+    const job = { id: crypto.randomUUID(), title: pendingUpdate.name, filename: `Modion ${pendingUpdate.version}`, saved: true };
+    try {
+      await updater.install(pendingUpdate, __dirname, { onProgress: (received, total) => emit({ ...job, state: 'progress', received, total }) });
+    } finally {
+      emit({ ...job, state: 'done' });
+    }
+    setTimeout(() => { app.relaunch(); app.exit(0); }, 600); // after the answer has reached the page
+    return { version: pendingUpdate.version };
   },
 
   'settings.setOpenLog': (a) => {

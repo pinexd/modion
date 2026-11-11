@@ -39,6 +39,7 @@ class Store {
       msClientId: typeof config.msClientId === 'string' ? config.msClientId : '',
       launchMode: ['prism', 'account', 'offline'].includes(config.launchMode) ? config.launchMode : 'prism',
       openLogOnLaunch: config.openLogOnLaunch !== false, // on unless switched off
+      checkUpdates: config.checkUpdates !== false,       // likewise
       offlineName: typeof config.offlineName === 'string' ? config.offlineName : '',
       // Folders that hold instances Modion created; new ones go into newInstanceDir.
       libraries: [...new Set((Array.isArray(config.libraries) ? config.libraries : [])

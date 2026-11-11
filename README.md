@@ -37,6 +37,16 @@ portable `modion-<version>-windows-x64.zip`: unpack it anywhere and run `Modion.
 instances in `%APPDATA%\Modion\instances`, and downloaded game files in
 `%LOCALAPPDATA%\ModionApp`.
 
+### Updates
+
+Modion looks at this project's GitHub releases when it starts (this can be switched off in
+Settings, which also has a "Check Now" button) and asks before doing anything. An installed
+or portable copy can then update itself: it downloads the new version of Modion's own
+files, checks them against the project's release signature (the public key is built in; an
+update that is unsigned or signed by anyone else is refused), swaps them in and restarts.
+A copy run from a source checkout is only pointed at the release page. When a new version
+needs a newer Electron, the full package has to be downloaded once.
+
 ### From a checkout
 
 With Electron installed (`sudo pacman -S electron`), `./modion` in a clone of this
@@ -113,6 +123,7 @@ finished in GitHub's editor before publishing.
 | `src/content.js` | Downloads (checksum-verified), dependencies, library management |
 | `src/instances.js` | Launcher detection |
 | `src/launcher.js` | Creating Prism instances and starting the game through Prism |
+| `src/updater.js` | Looking for new releases and installing a signed update |
 | `src/java.js` | Finding the Java installations on the computer |
 | `src/platform.js` | Folders and names that differ between Linux and Windows |
 | `src/libraries.js` | Instance libraries: the folders of Modion's own instances |

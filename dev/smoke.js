@@ -520,6 +520,37 @@ require('../main.js').ready.then(async (win) => {
     await js(`api('config.get').then((c) => setConfig(c))`);
   });
 
+  await step('an available update is offered, never installed unasked', async () => {
+    const updater = require('../src/updater.js');
+    const real = { check: updater.check, canInstall: updater.canInstall };
+    let installs = 0;
+    updater.install = async () => { installs++; };
+    updater.check = async () => ({ version: '9.9.9', name: 'Modion 9.9.9', notes: 'Something new.\n<b>not markup</b>', page: 'https://github.com/pinexd/modion/releases', payload: { url: 'x', sig: 'y', size: 1 } });
+    try {
+      await js(`go('settings')`);
+      await waitFor(`[...document.querySelectorAll('.panel h2')].some((x) => x.textContent === 'Updates')`, 'updates panel');
+      await js(`[...document.querySelectorAll('.settings .btn')].find(b => b.textContent === 'Check Now').click()`);
+      await waitFor(`!document.querySelector('#overlay').hidden && /Modion 9\.9\.9 is available/.test(document.querySelector('#overlay').textContent)`, 'update screen');
+      // This copy runs from the source folder, so it must offer the download page, not an install.
+      expect(await js(`[...document.querySelectorAll('#overlay .btn')].map(b => b.textContent).join('|')`) === 'Later|Open Download Page', 'a source checkout was offered a self-update: ' + await js(`[...document.querySelectorAll('#overlay .btn')].map(b => b.textContent).join('|')`));
+      expect(await js(`!document.querySelector('#overlay b') && document.querySelector('#overlay .notes').textContent.includes('<b>not markup</b>')`), 'release notes were treated as markup');
+      expect((await js(`window.modion.call('update.install')`)).code === 'NOT_INSTALLABLE' && installs === 0, 'an install was possible from a source checkout');
+      updater.canInstall = () => true;
+      await js(`closeScreen()`);
+      await js(`checkForUpdate(true)`);
+      await waitFor(`[...document.querySelectorAll('#overlay .btn')].some(b => b.textContent === 'Update and Restart')`, 'install button');
+      await shot('19-update');
+      expect(installs === 0, 'the update was installed without being asked');
+      await js(`closeScreen()`);
+      updater.check = async () => null;
+      await js(`checkForUpdate(true)`);
+      await waitFor(`[...document.querySelectorAll('#toasts .toast')].some(t => /newest version/.test(t.textContent))`, 'no-update message');
+      expect((await js(`window.modion.call('update.install')`)).code === 'BAD_REQUEST' && installs === 0, 'an install ran with no update found');
+    } finally {
+      Object.assign(updater, real);
+    }
+  });
+
   await step('category filter, filter-mismatch warning, and back/forward buttons', async () => {
     await js(`go('browse')`);
     await waitFor(`S.browse.results && document.querySelectorAll('#view .bar select')[0].options.length > 8`, 'category menu');
