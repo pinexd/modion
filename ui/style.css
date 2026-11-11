@@ -406,37 +406,37 @@ p.label.gold { color: var(--gold, #ffd75e); }
     box-shadow var(--quick) var(--ease), transform var(--quick) var(--ease), filter var(--quick) var(--ease), opacity var(--quick) var(--ease);
 }
 .btn:active:not(:disabled), .stop:active:not(:disabled) { transform: translateY(1px); }
-.btn.green:hover:not(:disabled) { box-shadow: inset 0 2px var(--green-hi), inset 0 -2px var(--green-lo), 0 0 0 1px rgba(39, 206, 64, .25), 0 4px 18px rgba(39, 206, 64, .22); }
-.btn.red:hover:not(:disabled), .stop:hover:not(:disabled) { box-shadow: inset 0 2px #ef6a6a, inset 0 -2px #7d1717, 0 4px 18px rgba(220, 64, 64, .28); }
-.btn.play { box-shadow: inset 0 2px var(--green-hi), inset 0 -2px var(--green-lo), 0 6px 18px rgba(0, 0, 0, .45); }
-.btn.play:disabled { box-shadow: none; }
+/* Light stays inside the button's outline: the face brightens, nothing spills past the border. */
+.btn.green:hover:not(:disabled) { box-shadow: inset 0 2px #4be063, inset 0 -2px var(--green-lo), inset 0 0 14px rgba(255, 255, 255, .08); }
+.btn.red:hover:not(:disabled), .stop:hover:not(:disabled) { box-shadow: inset 0 2px #f58a8a, inset 0 -2px #7d1717, inset 0 0 14px rgba(255, 255, 255, .08); }
+.btn.play, .btn.play:hover:not(:disabled) { filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .45)); }
 
 /* While the game is open the Play button breathes, slowly. */
 .btn.green.playing:disabled { animation: breathe 3.2s ease-in-out infinite; }
-@keyframes breathe { 0%, 100% { box-shadow: inset 0 2px #6f9a7c, inset 0 -2px #2c4136, 0 0 0 rgba(39, 206, 64, 0); } 50% { box-shadow: inset 0 2px #6f9a7c, inset 0 -2px #2c4136, 0 0 22px rgba(39, 206, 64, .28); } }
+@keyframes breathe { 0%, 100% { box-shadow: inset 0 2px #6f9a7c, inset 0 -2px #2c4136, inset 0 0 0 rgba(140, 230, 160, 0); } 50% { box-shadow: inset 0 2px #8fc09d, inset 0 -2px #2c4136, inset 0 0 18px rgba(140, 230, 160, .22); } }
 
 /* Sidebar and tabs: the marker slides in rather than appearing. */
-#rail { background: linear-gradient(180deg, #212121, var(--side) 220px); box-shadow: 1px 0 0 #141414; }
-.nav-item { position: relative; }
-.nav-item:hover:not(.on) { transform: translateX(2px); }
-.nav-item.on { background: linear-gradient(90deg, #3d3d3d, #333); }
+/* The sidebar is a panel standing in front of the page: it throws a shadow to its right,
+   its entries are raised tiles, and the one in use is pressed in and lit. */
+#rail { position: relative; z-index: 3; overflow-x: hidden; padding: 0 8px 10px; background: linear-gradient(180deg, #262626, #1a1a1a 320px, #171717); box-shadow: inset -1px 0 rgba(255, 255, 255, .05), 6px 0 22px rgba(0, 0, 0, .45); }
+.brand { margin: 0 -8px 6px; background: linear-gradient(180deg, #2e2e2e, #232323); box-shadow: inset 0 -1px #111, 0 1px rgba(255, 255, 255, .04), 0 6px 14px rgba(0, 0, 0, .3); }
+.brand img { filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .6)); }
+.nav-label { padding-left: 12px; text-shadow: 0 1px 0 #000; }
+.nav-item { position: relative; margin: 2px 0; padding: 8px 10px; border: 1px solid transparent; border-left-width: 1px; }
+.nav-item img { filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .55)); }
+.nav-item:hover:not(.on), .nav-item:focus-visible:not(.on) { background: linear-gradient(180deg, #333, #2a2a2a); border-color: #0f0f0f; box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 3px 8px rgba(0, 0, 0, .35); }
+.nav-item.on { background: linear-gradient(180deg, #2b2b2b, #3a3a3a); border-color: #0c0c0c; box-shadow: inset 0 2px 5px rgba(0, 0, 0, .55), inset 3px 0 #fff, 0 1px rgba(255, 255, 255, .06); }
 .tab { position: relative; border-bottom-color: transparent !important; }
 .tab::after { content: ''; position: absolute; left: 0; right: 0; bottom: -3px; height: 3px; background: #fff; transform: scaleX(0); transform-origin: left; transition: transform .22s var(--ease); }
 .tab.on::after { transform: scaleX(1); }
 .tab:hover:not(.on)::after { transform: scaleX(.35); background: #8a8a8a; }
 
 /* The header and the bottom bar sit a little above the page. */
-#top { position: relative; z-index: 2; box-shadow: 0 4px 14px rgba(0, 0, 0, .28); }
-#bottom { position: relative; z-index: 2; box-shadow: 0 -6px 18px rgba(0, 0, 0, .32); background: linear-gradient(180deg, #2a2a2a, var(--head)); }
+#top { position: relative; z-index: 2; }
+#bottom { position: relative; z-index: 2; background: linear-gradient(180deg, #2a2a2a, var(--head)); }
 
 /* Lists: a marker slides in on the row under the pointer, and its picture lifts slightly. */
-.row.click { box-shadow: inset 0 0 #fff; }
-.row.click:hover, .row.click:focus-visible { box-shadow: inset 3px 0 #9a9a9a; }
-.row.selected, .row.click.selected { box-shadow: inset 4px 0 #fff; }
 .row.click:hover .slot img { transform: scale(1.06); }
-.slot { box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
-.field:focus { box-shadow: 0 0 0 3px rgba(255, 255, 255, .12); }
-.check input:checked + .box { box-shadow: 0 0 10px rgba(39, 206, 64, .35); }
 
 /* A new page fades up into place. */
 #view.enter { animation: arrive .2s var(--ease) both; }
@@ -461,3 +461,23 @@ p.label.gold { color: var(--gold, #ffd75e); }
   #view.enter, #overlay, .modal, #overlay.lightbox img, .toast, .btn.green.playing:disabled { animation: none !important; }
   *, *::before, *::after { transition-duration: .001s !important; }
 }
+
+/* ---------- depth ----------
+   Layers, front to back: sidebar, header and bottom bar, panels and rows, the page. */
+#view { background: linear-gradient(180deg, #2c2c2c, var(--main) 90px); }
+#top { background: linear-gradient(180deg, #2d2d2d, var(--head)); box-shadow: inset 0 1px rgba(255, 255, 255, .05), 0 4px 14px rgba(0, 0, 0, .35); }
+#bottom { box-shadow: inset 0 1px rgba(255, 255, 255, .06), 0 -6px 18px rgba(0, 0, 0, .4); }
+.bar { position: relative; }
+.row { background: linear-gradient(180deg, rgba(255, 255, 255, .025), rgba(0, 0, 0, .04)); border-bottom-color: #232323; box-shadow: inset 0 1px rgba(255, 255, 255, .04); }
+.row.click:hover, .row.click:focus-visible { background: linear-gradient(180deg, #414141, #383838); box-shadow: inset 3px 0 #9a9a9a, inset 0 1px rgba(255, 255, 255, .07); }
+.row.selected, .row.click.selected { box-shadow: inset 4px 0 #fff, inset 0 1px rgba(255, 255, 255, .07); }
+.slot { box-shadow: 0 3px 8px rgba(0, 0, 0, .45), inset 0 0 0 1px rgba(0, 0, 0, .5); }
+.panel { box-shadow: inset 0 1px rgba(255, 255, 255, .05), 0 6px 16px rgba(0, 0, 0, .28); }
+.field { box-shadow: inset 0 2px 4px rgba(0, 0, 0, .5); }
+.field:focus { box-shadow: inset 0 2px 4px rgba(0, 0, 0, .5), 0 0 0 3px rgba(255, 255, 255, .12); }
+.check .box { box-shadow: inset 0 1px 3px rgba(0, 0, 0, .6); }
+.check input:checked + .box { box-shadow: inset 0 1px rgba(255, 255, 255, .25); }
+.btn { text-shadow: 0 1px 0 rgba(0, 0, 0, .4); }
+.tag { box-shadow: inset 0 1px rgba(255, 255, 255, .07), 0 1px 2px rgba(0, 0, 0, .3); }
+.pager, .screen-buttons, .modal-title { box-shadow: inset 0 1px rgba(255, 255, 255, .05); }
+.inst-btn:hover, .inst-btn:focus-visible { box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 3px 8px rgba(0, 0, 0, .35); }
