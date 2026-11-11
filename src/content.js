@@ -477,11 +477,32 @@ async function saveTo({ sources }, req, destDir, emit) {
   }
 }
 
+// Files taken over from the website before Modion asked for the project's details were
+// recorded under the file's name and without an icon. Asks once per file and fills them in.
+async function nameAdopted({ store, sources }, found) {
+  const todo = found.filter((e) => !e.unknown && e.projectId && !e.icon && !e.briefed && sources && sources[e.source] && typeof sources[e.source].brief === 'function'
+    && (e.source !== 'curseforge' || sources.curseforge.hasKey()));
+  if (!todo.length) return;
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(6, todo.length) }, async () => {
+    while (next < todo.length) {
+      const e = todo[next++];
+      const meta = await sources[e.source].brief(String(e.projectId)).catch(() => null);
+      if (!meta) continue; // offline or refused: try again next time
+      if (meta.icon) e.icon = meta.icon;
+      if (meta.title) e.title = meta.title; // what was recorded is the file's own name
+      e.briefed = true;
+    }
+  }));
+  store.saveManifest();
+}
+
 async function list(ctx, type) {
   const { store } = ctx;
   const inst = activeInstance(store);
   const { dir, files } = await scan(ctx, inst, type);
   const entries = store.instance(inst.id) ? store.entries(inst.id) : {};
+  await nameAdopted(ctx, files.map((f) => entries[f.key]).filter(Boolean));
   const label = (f) => { const e = entries[f.key]; return (e && !e.unknown && e.title) || f.name; };
   return {
     dir,
@@ -546,4 +567,4 @@ function installedIds(store) {
   return out;
 }
 
-module.exports = { download, install, adoptFile, activeInstance, saveTo, list, toggle, remove, installedIds, discardPartials, FOLDER };
+module.exports = { download, install, adoptFile, nameAdopted, activeInstance, saveTo, list, toggle, remove, installedIds, discardPartials, FOLDER };

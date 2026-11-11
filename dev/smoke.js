@@ -614,7 +614,8 @@ require('../main.js').ready.then(async (win) => {
     cf.hasKey = () => true;
     cf.getFiles = async (ids) => ids.map((i) => files[i]).filter(Boolean);
     cf.getVersion = async (_p, v) => files[v];
-    cf.brief = async (p) => ({ title: `project ${p}`, url: `https://www.curseforge.com/minecraft/mc-mods/p${p}` });
+    const withIcon = true;
+    cf.brief = async (p) => ({ title: `project ${p}`, icon: withIcon ? 'https://example.com/logo.png' : null, url: `https://www.curseforge.com/minecraft/mc-mods/p${p}` });
     const packFile = path.join(work, 'cf-pack.zip');
     writeZip(packFile, [{ name: 'manifest.json', data: Buffer.from(JSON.stringify({
       name: 'Left Out Pack', minecraft: { version: '1.21.1', modLoaders: [{ id: 'fabric-0.16.0', primary: true }] }, overrides: 'overrides',
@@ -676,6 +677,16 @@ require('../main.js').ready.then(async (win) => {
 
   await step('files only CurseForge knows are named in the library', async () => {
     const cf = require('../src/curseforge');
+      // The fetched files carry their project's name and icon, not the file's.
+      await js(`window.modion.call('instances.setActive', { id: '${inst.id}' })`);
+      const fetched = async () => (await js(`window.modion.call('library.list', { type: 'mod' })`)).data.files.filter((f) => /^blocked-/.test(f.file));
+      const got = await fetched();
+      expect(got.length === 2 && got.every((f) => f.meta && /^project \d0$/.test(f.meta.title) && f.meta.icon === 'https://example.com/logo.png'), `website files in the library: ${JSON.stringify(got)}`);
+      // Files recorded before this was done are asked about once and corrected.
+      const old = { source: 'curseforge', projectId: '20', title: 'blocked-a', icon: null };
+      let saved = 0;
+      await require('../src/content.js').nameAdopted({ store: { saveManifest: () => saved++ }, sources: { curseforge: cf } }, [old]);
+      expect(old.title === 'project 20' && old.icon && old.briefed && saved === 1, `an old record was not corrected: ${JSON.stringify(old)}`);
     const real = { hasKey: cf.hasKey, identify: cf.identify, fingerprints: cf.fingerprints };
     let asked = 0;
     cf.hasKey = () => true;

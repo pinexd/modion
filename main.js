@@ -503,7 +503,10 @@ const methods = {
     const projectId = id(a.projectId, 'project');
     const v = await curseforge.getVersion(projectId, id(a.versionId, 'file'));
     if (!v.expected) throw new ApiError('CurseForge did not say which file this is.', 'BAD_REPLY');
-    const page = (await curseforge.brief(projectId)).url;
+    const about = await curseforge.brief(projectId);
+    const page = about.url;
+    // A pack's left-out file comes with the file's name only: the project's own name and icon are used.
+    const shown = a.icon ? { title: text(a.title, 200), icon: text(a.icon, 2000) } : { title: about.title || text(a.title, 200), icon: about.icon || null };
     if (!page) throw new ApiError('CurseForge did not give a page for this project.', 'BAD_REPLY');
     const job = { id: crypto.randomUUID(), title: text(a.title, 200) || v.name, filename: v.expected.filename };
     try {
@@ -517,8 +520,8 @@ const methods = {
         destDir: path.join(inst.path, content.FOLDER[type]),
         onProgress: (received, total) => emit({ ...job, state: 'progress', received, total }),
       });
-      await content.adoptFile(ctx(), inst, { source: 'curseforge', projectId, type, title: text(a.title, 200), icon: text(a.icon, 2000) || null }, got.tmp, v);
-      emit({ ...job, state: 'done', icon: text(a.icon, 2000) || null });
+      await content.adoptFile(ctx(), inst, { source: 'curseforge', projectId, type, title: shown.title, icon: shown.icon }, got.tmp, v);
+      emit({ ...job, state: 'done', icon: shown.icon });
     } catch (e) {
       emit({ ...job, state: 'error', error: e.message });
       throw e;
@@ -548,7 +551,10 @@ const methods = {
     const projectId = id(a.projectId, 'project');
     const v = await curseforge.getVersion(projectId, id(a.versionId, 'file'));
     if (!v.expected) throw new ApiError('CurseForge did not say which file this is.', 'BAD_REPLY');
-    const page = (await curseforge.brief(projectId)).url;
+    const about = await curseforge.brief(projectId);
+    const page = about.url;
+    // A pack's left-out file comes with the file's name only: the project's own name and icon are used.
+    const shown = a.icon ? { title: text(a.title, 200), icon: text(a.icon, 2000) } : { title: about.title || text(a.title, 200), icon: about.icon || null };
     if (!page) throw new ApiError('CurseForge did not give a page for this project.', 'BAD_REPLY');
     const dir = await fs.promises.mkdtemp(path.join(require('os').tmpdir(), 'modion-pack-'));
     const job = { id: crypto.randomUUID(), title: text(a.title, 200) || v.name, filename: v.expected.filename };
