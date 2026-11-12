@@ -81,7 +81,10 @@ async function downloads(pack, gameDir, curseforge) {
       });
       if (!url) { skipped.push({ title: path.basename(f.path), reason: 'the pack gives no download from an allowed site' }); continue; }
       const hashes = f.hashes || {};
-      items.push({ url, sha512: hashes.sha512, sha1: hashes.sha1, size: Number(f.fileSize) || 0, dir: path.dirname(full), filename: path.basename(full) });
+      // The format requires a checksum for every file; one without cannot be verified, so it is not fetched.
+      const hex = (v, n) => typeof v === 'string' && new RegExp(`^[0-9a-fA-F]{${n}}$`).test(v);
+      if (!hex(hashes.sha512, 128) && !hex(hashes.sha1, 40)) { skipped.push({ title: path.basename(f.path), reason: 'the pack gives no checksum for it' }); continue; }
+      items.push({ url, sha512: hex(hashes.sha512, 128) ? hashes.sha512 : undefined, sha1: hex(hashes.sha1, 40) ? hashes.sha1 : undefined, size: Number(f.fileSize) || 0, dir: path.dirname(full), filename: path.basename(full) });
     }
     return { items, skipped, blocked };
   }

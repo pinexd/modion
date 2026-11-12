@@ -390,7 +390,8 @@ require('../main.js').ready.then(async (win) => {
     const index = (files) => JSON.stringify({ formatVersion: 1, game: 'minecraft', versionId: '1', name: 'Smoke Pack', dependencies: { minecraft: '1.21.1', 'fabric-loader': '0.16.0' }, files });
     const good = [{ path: `mods/${real.file.filename}`, hashes: { sha1: real.file.sha1, sha512: real.file.sha512 }, downloads: [real.file.url], fileSize: real.file.size },
       { path: 'mods/server-only.jar', env: { client: 'unsupported' }, hashes: {}, downloads: ['https://cdn.modrinth.com/nope'], fileSize: 1 },
-      { path: 'mods/elsewhere.jar', hashes: {}, downloads: ['https://evil.example/x.jar'], fileSize: 1 }];
+      { path: 'mods/elsewhere.jar', hashes: {}, downloads: ['https://evil.example/x.jar'], fileSize: 1 },
+      { path: 'mods/unchecked.jar', hashes: {}, downloads: [real.file.url], fileSize: real.file.size }]; // no checksum: must not be fetched
     const make = (file, entries) => require('child_process').execFileSync('python3', ['-c',
       'import sys,json,zipfile\nz=zipfile.ZipFile(sys.argv[1],"w",zipfile.ZIP_DEFLATED)\nfor n,d in json.loads(sys.argv[2]): z.writestr(n,d)\nz.close()', file, JSON.stringify(entries)]);
     const goodPack = path.join(work, 'good.mrpack'), slipPack = path.join(work, 'slip.mrpack'), pathPack = path.join(work, 'path.mrpack');
