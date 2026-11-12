@@ -89,6 +89,9 @@ function check(label, value, onchange) {
 }
 
 const message = (...kids) => h('div', { class: 'empty' }, kids);
+// Searching a list in place: every word typed has to occur somewhere in the text.
+const wordsOf = (text) => String(text || '').toLowerCase().split(/\s+/).filter(Boolean);
+const matches = (text, words) => words.every((w) => text.includes(w));
 const loading = (text = 'Loading...') => message(h('p', { class: 'dim' }, text));
 
 /* ---------- state ---------- */
@@ -1198,7 +1201,20 @@ function viewLibrary(v) {
   const summary = h('span', { class: 'dim' }), note = h('span', { class: 'faint small' });
   const updateAll = btn('Update All', () => runUpdates(), 'green');
   updateAll.hidden = true;
-  add(v, h('div', { class: 'bar' }, summary, note,
+  // Narrows the list to rows whose name, file name or site contains every word typed.
+  if (lib.queryFor !== `${inst.id}:${lib.type}`) { lib.queryFor = `${inst.id}:${lib.type}`; lib.query = ''; } // a search belongs to the list it was typed over
+  const find = h('input', { class: 'field find', type: 'search', placeholder: `Search these ${TYPES[lib.type].toLowerCase()}...`, spellcheck: false, value: lib.query || '', ariaLabel: 'Search this list',
+    oninput: () => { lib.query = find.value; applySearch(); } });
+  const noMatch = h('div', { class: 'empty', hidden: true }, h('p', { class: 'dim' }, 'Nothing here matches the search.'));
+  let countText = '';
+  const applySearch = () => {
+    const words = wordsOf(find.value), rows = [...list.querySelectorAll('.row[data-find]')];
+    let shown = 0;
+    for (const r of rows) { r.hidden = !matches(r.dataset.find, words); if (!r.hidden) shown++; }
+    noMatch.hidden = !rows.length || shown > 0;
+    summary.textContent = words.length && rows.length ? `${shown} of ${countText}` : countText;
+  };
+  add(v, h('div', { class: 'bar' }, summary, find, note,
       h('div', { class: 'push bar' }, updateAll, btn('Open Folder', () => api('library.openFolder', { type: lib.type }).catch(fail)))),
     list);
 
@@ -1271,7 +1287,8 @@ function viewLibrary(v) {
       return;
     }
     const off = res.files.filter((f) => !f.enabled).length;
-    summary.textContent = `${res.files.length} file${res.files.length === 1 ? '' : 's'}${off ? `, ${off} disabled` : ''}`;
+    countText = `${res.files.length} file${res.files.length === 1 ? '' : 's'}${off ? `, ${off} disabled` : ''}`;
+    summary.textContent = countText;
     shownFiles = res.files;
     metaOf.clear();
     for (const f of res.files) if (f.meta) metaOf.set(f.file, f.meta);
@@ -1285,7 +1302,7 @@ function viewLibrary(v) {
       const m = f.meta;
       const title = h('div', { class: `row-title ${f.enabled ? '' : 'faint'}` }, m ? m.title : f.name);
       const open = m && (() => openProject({ source: m.source, id: m.projectId, type, title: m.title, icon: m.icon, summary: '' }, 'library'));
-      return h('div', { class: `row ${open ? 'click' : ''}`, onclick: open || null },
+      return h('div', { class: `row ${open ? 'click' : ''}`, onclick: open || null, 'data-find': [m && m.title, f.name, m && (SOURCES[m.source] || m.source), m && m.versionName].filter(Boolean).join(' ').toLowerCase() },
         slot(m && m.icon, 48),
         h('div', { class: 'row-main' },
           title,
@@ -1352,6 +1369,8 @@ function viewSettings(v) {
   const saveId = btn('Save ID', () => act(api('account.setClientId', { clientId: clientId.value }), 'ID not saved'));
   const signIn = signingIn
     ? btn('Cancel Sign-in', () => api('account.cancel').catch(() => {}))
+    add(list, noMatch);
+    applySearch();
     : who
       ? btn('Sign Out', () => act(api('account.signOut'), 'Could not sign out'))
       : btn('Sign In with Microsoft', () => { signingIn = true; render(); act(api('account.signIn'), 'Sign-in failed'); }, 'green');

@@ -974,6 +974,15 @@ require('../main.js').ready.then(async (win) => {
     expect((await call('instances.setSettings', { id, fromPack: true, java: '', jvmArgs: '', env: '', memory: null })).ok, 'the instance could not be marked as a modpack');
     await js(`api('config.get').then(setConfig)`);
     await openLibrary();
+    // Searching the list in place.
+    const rowsShown = () => js(`[...document.querySelectorAll('#view .list .row')].filter(r => !r.hidden).map(r => r.querySelector('.row-title').textContent).join()`);
+    const everyRow = await rowsShown();
+    await js(`(() => { const i = document.querySelector('#view .find'); i.value = 'MENU modrinth'; i.dispatchEvent(new Event('input')); })()`);
+    expect(await rowsShown() === 'Mod Menu' && /^1 of \d+ files/.test(await js(`document.querySelector('#view .bar .dim').textContent`)), `searching the library: ${await rowsShown()}`);
+    await js(`(() => { const i = document.querySelector('#view .find'); i.value = 'zzzz'; i.dispatchEvent(new Event('input')); })()`);
+    expect(await rowsShown() === '' && await js(`!document.querySelector('#view .list .empty').hidden`), 'no "nothing matches" note');
+    await js(`(() => { const i = document.querySelector('#view .find'); i.value = ''; i.dispatchEvent(new Event('input')); })()`);
+    expect(await rowsShown() === everyRow && everyRow.split(',').length > 1, 'clearing the search did not bring the list back');
     await waitFor(`${arrows}.length === 1`, 'update offered again');
     const all = () => js(`[...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).click()`);
     await all();
