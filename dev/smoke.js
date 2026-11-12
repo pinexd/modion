@@ -899,6 +899,19 @@ require('../main.js').ready.then(async (win) => {
     const labels = () => js(`[...document.querySelectorAll('#pager .pages > *')].map(x => x.classList.contains('arrow') ? (x.disabled ? '(' : '<') : x.textContent + (x.classList.contains('on') ? '*' : '')).join(' ')`);
     const on = (n) => waitFor(`document.querySelector('#pager .pg.on') && document.querySelector('#pager .pg.on').textContent === '${n}' && S.browse.results && S.browse.page === ${n - 1}`, `page ${n}`);
     await on(1);
+    // "Hide installed" takes installed projects off the page, and says how many.
+    const rows = () => js(`document.querySelectorAll('#results .row.click').length`);
+    const tick = () => js(`[...document.querySelectorAll('#view .bar .check')].find(l => l.textContent === 'Hide installed').querySelector('input').click()`);
+    const all = await rows();
+    const fakeKey = await js(`(() => { const p = S.browse.results.hits[0], k = p.source + ':' + p.id; const had = k in S.cfg.installed; S.cfg.installed[k] = S.cfg.installed[k] || 'x'; return had ? '' : k; })()`);
+    await tick();
+    await waitFor(`document.querySelector('#results .hidden-note')`, 'note about hidden projects');
+    const hiddenCount = Number((await js(`document.querySelector('#results .hidden-note').textContent`)).match(/^\d+/)[0]);
+    expect(hiddenCount >= 1 && await rows() === all - hiddenCount, `hide installed: ${await rows()} of ${all} rows, ${hiddenCount} hidden`);
+    await shot('30-hide-installed');
+    await tick();
+    expect(await rows() === all && !(await js(`Boolean(document.querySelector('#results .hidden-note'))`)), 'unticking did not bring the projects back');
+    if (fakeKey) await js(`delete S.cfg.installed[${JSON.stringify(fakeKey)}]`);
     const last = await js(`[...document.querySelectorAll('#pager .pg:not(.arrow)')].pop().textContent`);
     expect(await labels() === `( 1* 2 ... ${last} <`, `first page bar: ${await labels()}`);
     await js(`[...document.querySelectorAll('#pager .pg')].find(x => x.textContent === '2').click()`);

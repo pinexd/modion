@@ -105,7 +105,8 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
   switched off.
 - **Browse** – pick Modrinth or CurseForge in the sidebar, a content type in the tabs. Results
   are filtered to the active instance's version and loader. Several categories can be ticked
-  at once; results are then the ones in all of them.
+  at once; results are then the ones in all of them. "Hide installed" leaves out what the
+  selected instance already has, and the page bar jumps to a neighbouring, typed or last page.
 - **Modpacks** – the first tab on the Modrinth and CurseForge pages (Mods is still the one
   that opens). Installing a modpack creates a new instance from it; the version and loader
   filters there are your own choice, not the selected instance's.

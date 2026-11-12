@@ -545,6 +545,8 @@ function renderBottom() {
 const nav = { stack: [], at: -1, moving: false };
 const navKey = (n) => [n.view, n.source, n.btype, n.ltype, n.project ? `${n.project.hit.source}:${n.project.hit.id}` : ''].join('|');
 
+try { S.browse.hideInstalled = localStorage.getItem('hideInstalled') === '1'; } catch {}
+
 // Arriving somewhere new fades the page in once; a redraw of the same place does not.
 let shownPlace = '';
 function navRecord() {
@@ -793,7 +795,12 @@ function drawResults() {
   const b = S.browse, res = b.results;
   const list = $('#results'), pager = $('#pager');
   if (!list || !res) return;
-  fill(list, ...(res.hits.length ? res.hits.map(hitRow) : [message(h('p', { class: 'dim' }, 'Nothing found. Try fewer filters.'))]));
+  // "Hide installed" takes what the selected instance already has off the page being shown.
+  const mine = (p) => `${p.source}:${p.id}` in S.cfg.installed;
+  const hidden = b.hideInstalled && b.type !== 'modpack' ? res.hits.filter(mine).length : 0;
+  const shown = hidden ? res.hits.filter((p) => !mine(p)) : res.hits;
+  fill(list, ...(shown.length ? shown.map(hitRow) : [message(h('p', { class: 'dim' }, res.hits.length ? 'Everything on this page is already installed. Try the next page.' : 'Nothing found. Try fewer filters.'))]),
+    hidden && shown.length && h('div', { class: 'row faint hidden-note' }, `${hidden} installed ${hidden === 1 ? 'project is' : 'projects are'} hidden on this page.`));
   list.scrollTop = b.scroll;
   b.scroll = 0;
   const total = Number(res.total) || 0;
@@ -921,7 +928,12 @@ function viewBrowse(v) {
       category,
       versionSelect(b.gameVersion, 'Any version', (gameVersion) => change({ gameVersion })),
       (b.type === 'mod' || b.type === 'modpack') && select(Object.entries(LOADERS), b.loader, (loader) => change({ loader })),
-      select(Object.entries(SORTS), b.sort, (sort) => change({ sort }))),
+      select(Object.entries(SORTS), b.sort, (sort) => change({ sort })),
+      b.type !== 'modpack' && check('Hide installed', Boolean(b.hideInstalled), (on) => {
+        b.hideInstalled = on;
+        try { localStorage.setItem('hideInstalled', on ? '1' : ''); } catch {}
+        if (b.results) drawResults();
+      })),
     mismatch && h('div', { class: 'bar warn' },
       h('span', {}, `These filters do not match "${inst.name}" (${instLabel(inst)}). What is listed here may have no file that works in that instance.`),
       h('div', { class: 'push' }, btn('Match Instance', () => change({ gameVersion: inst.gameVersion || b.gameVersion, loader: inst.loader || b.loader }), 'small'))),
