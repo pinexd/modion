@@ -1151,10 +1151,38 @@ function viewLog(v, inst) {
   const out = h('div', { class: 'log' });
   const box = h('div', { class: 'list' }, out);
   const follow = check('Follow', true, () => { if (follow.firstChild.checked) box.scrollTop = box.scrollHeight; });
-  add(v, h('div', { class: 'bar' }, h('span', {}, `Game log of ${inst.name}`), where, h('div', { class: 'push' }, follow)), box);
+  // Which kinds of line are shown (remembered), and a search over the lines.
+  let levels = {};
+  try { levels = JSON.parse(localStorage.getItem('logLevels')) || {}; } catch {}
+  const paintLevels = () => { for (const [k] of LOG_LEVELS) out.classList.toggle(`no-${k}`, levels[k] === false); };
+  let words = [];
+  const count = h('span', { class: 'faint small' });
+  const recount = () => {
+    if (!words.length) { count.textContent = ''; return; }
+    const n = [...out.children].filter((d) => !d.hidden && d.className !== 'faint' && levels[d.className] !== false).length;
+    count.textContent = `${n} matching line${n === 1 ? '' : 's'}`;
+  };
+  const find = h('input', { class: 'field find', type: 'search', placeholder: 'Search the log...', spellcheck: false, ariaLabel: 'Search the log',
+    oninput: () => {
+      words = wordsOf(find.value);
+      for (const d of out.children) d.hidden = !matches(d.textContent.toLowerCase(), words);
+      recount();
+      if (follow.firstChild.checked) box.scrollTop = box.scrollHeight;
+    } });
+  const boxes = LOG_LEVELS.map(([k, label]) => check(label, levels[k] !== false, (on) => {
+    levels[k] = on;
+    try { localStorage.setItem('logLevels', JSON.stringify(levels)); } catch {}
+    paintLevels();
+    recount();
+    if (follow.firstChild.checked) box.scrollTop = box.scrollHeight;
+  }));
+  paintLevels();
+  add(v, h('div', { class: 'bar' }, h('span', {}, `Game log of ${inst.name}`), where, h('div', { class: 'push' }, follow)),
+    h('div', { class: 'bar log-filter' }, find, boxes, count), box);
+const LOG_LEVELS = [['err', 'Errors'], ['warn', 'Warnings'], ['info', 'Info'], ['debug', 'Debug']];
   box.addEventListener('scroll', () => { follow.firstChild.checked = box.scrollHeight - box.scrollTop - box.clientHeight < 40; });
 
-  let source = '', offset = 0, waiting = false, empty = true;
+  let source = '', offset = 0, waiting = false, empty = true, tone = 'info';
   const note = (text) => { fill(out, h('div', { class: 'faint' }, text)); empty = true; };
   note('Waiting for the game to write a log...');
   const poll = async () => {
@@ -1164,7 +1192,7 @@ function viewLog(v, inst) {
     try { r = await api('log.read', { id: inst.id, source, offset }); } catch {}
     waiting = false;
     if (!r || !out.isConnected) return;
-    if (r.reset) note(r.source ? '' : 'No log yet. It appears here once the game has been started.');
+    if (r.reset) { note(r.source ? '' : 'No log yet. It appears here once the game has been started.'); tone = 'info'; }
     source = r.source;
     offset = r.offset;
     where.textContent = r.source ? '\u200e' + r.source : '';
@@ -1172,8 +1200,9 @@ function viewLog(v, inst) {
     if (empty) { fill(out); empty = false; }
     for (const line of r.text.split('\n')) {
       if (!line) continue;
-      const tone = /\b(ERROR|FATAL|Exception|Caused by)\b|^\s+at /.test(line) ? 'err' : /\bWARN\b/.test(line) ? 'warn' : '';
-      add(out, h('div', { class: tone }, line));
+      // A line that names no level (a wrapped message, say) belongs to the line before it.
+      tone = /\b(ERROR|FATAL|Exception|Caused by)\b|^\s+at /.test(line) ? 'err' : /\bWARN\b/.test(line) ? 'warn' : /\bINFO\b/.test(line) ? 'info' : /\b(DEBUG|TRACE)\b/.test(line) ? 'debug' : tone;
+      add(out, h('div', { class: tone, hidden: !matches(line.toLowerCase(), words) }, line));
     }
     while (out.childElementCount > LOG_LINES) out.firstChild.remove();
     if (follow.firstChild.checked) box.scrollTop = box.scrollHeight;
@@ -1185,6 +1214,7 @@ function viewLog(v, inst) {
 /* ---------- library ---------- */
 
 const updateCache = new Map(); // "instance:type" -> what library.updates found, until something is installed
+    recount();
 
 function viewLibrary(v) {
   const inst = activeInst();
@@ -1339,6 +1369,8 @@ function viewLibrary(v) {
 
 
 function viewSettings(v) {
+    add(list, noMatch);
+    applySearch();
   const key = h('input', { class: 'field', type: 'password', placeholder: S.cfg.ownCurseforgeKey ? 'A key is saved. Paste a new one to replace it.' : 'Paste your CurseForge API key', spellcheck: false, autocomplete: 'off' });
   const status = h('p', { class: S.cfg.hasCurseforgeKey ? 'label' : '' }, !S.cfg.hasCurseforgeKey ? 'CurseForge is not connected yet.' : S.cfg.ownCurseforgeKey ? 'CurseForge is connected with your own key.' : 'CurseForge is connected with the key that came with Modion. You can use your own instead.');
   const save = btn('Save Key', async () => {
@@ -1369,8 +1401,6 @@ function viewSettings(v) {
   const saveId = btn('Save ID', () => act(api('account.setClientId', { clientId: clientId.value }), 'ID not saved'));
   const signIn = signingIn
     ? btn('Cancel Sign-in', () => api('account.cancel').catch(() => {}))
-    add(list, noMatch);
-    applySearch();
     : who
       ? btn('Sign Out', () => act(api('account.signOut'), 'Could not sign out'))
       : btn('Sign In with Microsoft', () => { signingIn = true; render(); act(api('account.signIn'), 'Sign-in failed'); }, 'green');

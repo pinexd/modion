@@ -330,6 +330,21 @@ require('../main.js').ready.then(async (win) => {
     await waitFor(`document.querySelectorAll('.log > div').length === 3 && document.querySelector('.log .err').textContent.endsWith('\u00e9\u00e8')`, 'appended line', 8000);
     fs.appendFileSync(path.join(logs, 'latest.log'), 'ne\n');
     await waitFor(`document.querySelectorAll('.log > div').length === 4 && document.querySelector('.log').lastChild.textContent.endsWith('half a line')`, 'line completed later', 8000);
+    // Filtering the log: by kind of line (remembered) and by a search.
+    const seen = () => js(`[...document.querySelectorAll('.log > div')].filter(d => d.offsetParent).map(d => d.className).join()`);
+    const tick = (label) => js(`[...document.querySelectorAll('.log-filter .check')].find(c => c.textContent === '${label}').click()`);
+    const type = (sel, text) => js(`(() => { const i = document.querySelector('${sel}'); i.value = ${JSON.stringify('TEXT')}.replace('TEXT', '${text}'); i.dispatchEvent(new Event('input')); })()`);
+    expect(await seen() === 'info,warn,err,err', `log lines are sorted as ${await seen()}`);
+    await tick('Warnings');
+    await tick('Info');
+    expect(await seen() === 'err,err' && await js(`JSON.parse(localStorage.getItem('logLevels')).warn === false`), `with warnings and info off: ${await seen()}`);
+    await tick('Info');
+    await type('.log-filter .find', 'LINE');
+    expect(await seen() === 'info,err' && await js(`document.querySelector('.log-filter .small').textContent === '2 matching lines'`), `searching the log for "line": ${await seen()}`);
+    await shot('18b-log-filtered');
+    await type('.log-filter .find', '');
+    await tick('Warnings');
+    expect(await seen() === 'info,warn,err,err', 'the log filters did not clear');
     await shot('18-log');
     fs.writeFileSync(path.join(logs, 'latest.log'), '[13:00:00] [main/INFO]: new session\n'); // the game was restarted
     await waitFor(`document.querySelectorAll('.log > div').length === 1 && document.querySelector('.log').textContent.includes('new session')`, 'restarted log', 8000);
@@ -959,6 +974,15 @@ require('../main.js').ready.then(async (win) => {
     await waitFor(`${arrows}.length === 1 && /^Update All \\(1\\)$/.test([...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).textContent)`, 'one update offered');
     expect(await js(`${arrows}[0].closest('.row').textContent.includes('Mod Menu') && ${arrows}[0].title.startsWith('Update to ')`), 'the arrow is not on Mod Menu');
     await js(`document.querySelector('#toasts').replaceChildren()`);
+    // Searching the list in place.
+    const rowsShown = () => js(`[...document.querySelectorAll('#view .list .row')].filter(r => !r.hidden).map(r => r.querySelector('.row-title').textContent).join()`);
+    const everyRow = await rowsShown();
+    await js(`(() => { const i = document.querySelector('#view .find'); i.value = 'MENU modrinth'; i.dispatchEvent(new Event('input')); })()`);
+    expect(await rowsShown() === 'Mod Menu' && /^1 of \d+ files/.test(await js(`document.querySelector('#view .bar .dim').textContent`)), `searching the library: ${await rowsShown()}`);
+    await js(`(() => { const i = document.querySelector('#view .find'); i.value = 'zzzz'; i.dispatchEvent(new Event('input')); })()`);
+    expect(await rowsShown() === '' && await js(`!document.querySelector('#view .list .empty').hidden`), 'no "nothing matches" note');
+    await js(`(() => { const i = document.querySelector('#view .find'); i.value = ''; i.dispatchEvent(new Event('input')); })()`);
+    expect(await rowsShown() === everyRow && everyRow.split(',').length > 1, 'clearing the search did not bring the list back');
     // The arrow belongs to Remove: directly before it, the same height, its picture in the middle.
     const fit = await js(`(() => { const u = ${arrows}[0], n = u.nextElementSibling, a = u.getBoundingClientRect(), b = n.getBoundingClientRect(), i = u.firstChild.getBoundingClientRect();
       return { next: n.textContent, heights: [a.height, b.height], offY: (i.top + i.bottom - a.top - a.bottom) / 2, offX: (i.left + i.right - a.left - a.right) / 2 }; })()`);
@@ -974,15 +998,6 @@ require('../main.js').ready.then(async (win) => {
     expect((await call('instances.setSettings', { id, fromPack: true, java: '', jvmArgs: '', env: '', memory: null })).ok, 'the instance could not be marked as a modpack');
     await js(`api('config.get').then(setConfig)`);
     await openLibrary();
-    // Searching the list in place.
-    const rowsShown = () => js(`[...document.querySelectorAll('#view .list .row')].filter(r => !r.hidden).map(r => r.querySelector('.row-title').textContent).join()`);
-    const everyRow = await rowsShown();
-    await js(`(() => { const i = document.querySelector('#view .find'); i.value = 'MENU modrinth'; i.dispatchEvent(new Event('input')); })()`);
-    expect(await rowsShown() === 'Mod Menu' && /^1 of \d+ files/.test(await js(`document.querySelector('#view .bar .dim').textContent`)), `searching the library: ${await rowsShown()}`);
-    await js(`(() => { const i = document.querySelector('#view .find'); i.value = 'zzzz'; i.dispatchEvent(new Event('input')); })()`);
-    expect(await rowsShown() === '' && await js(`!document.querySelector('#view .list .empty').hidden`), 'no "nothing matches" note');
-    await js(`(() => { const i = document.querySelector('#view .find'); i.value = ''; i.dispatchEvent(new Event('input')); })()`);
-    expect(await rowsShown() === everyRow && everyRow.split(',').length > 1, 'clearing the search did not bring the list back');
     await waitFor(`${arrows}.length === 1`, 'update offered again');
     const all = () => js(`[...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).click()`);
     await all();
