@@ -41,6 +41,25 @@ const Pixel = (() => {
       return draw(16, (x, y) => (y < 3 || (y === 3 && r() < 0.6) || (y === 4 && r() < 0.25) ? pick(r, GRASS) : pick(r, DIRT)));
     },
     missing: () => draw(2, (x, y) => ((x + y) % 2 ? '#000000' : '#f800f8')),
+    // Stands in for a project that has no icon of its own: a plain cube.
+    noicon: () => fromMap([
+      '................',
+      '................',
+      '......gggg......',
+      '....gg....gg....',
+      '..gg........gg..',
+      '..ggg......ggg..',
+      '..g..gg..gg..g..',
+      '..g....gg....g..',
+      '..g....gg....g..',
+      '..g....gg....g..',
+      '..g....gg....g..',
+      '..gg...gg...gg..',
+      '....gg.gg.gg....',
+      '......gggg......',
+      '................',
+      '................',
+    ], { '.': '#33353b', g: '#9a9da6' }),
     library: () => fromMap([
       '................',
       '.kkkkkkkkkkkkkk.',

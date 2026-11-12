@@ -954,9 +954,12 @@ require('../main.js').ready.then(async (win) => {
     expect(await js(`[...document.querySelectorAll('#view .check input')].every(i => i.offsetParent === i.parentElement)`), 'a checkbox input is positioned against the page, not its label');
     await js(`document.querySelector('#view .list .check input').focus()`);
     expect(await js(`document.scrollingElement.scrollTop === 0 && document.body.scrollTop === 0`), 'focusing a checkbox scrolled the window');
+    // A project without an icon gets the cube, not a broken picture.
+    expect(await js(`(() => { const s = slot(null, 48).firstChild; return s.className === 'px' && s.src === Pixel.icon('noicon'); })()`), 'no placeholder for a missing icon');
     await waitFor(`${arrows}.length === 1 && /^Update All \\(1\\)$/.test([...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).textContent)`, 'one update offered');
     expect(await js(`${arrows}[0].closest('.row').textContent.includes('Mod Menu') && ${arrows}[0].title.startsWith('Update to ')`), 'the arrow is not on Mod Menu');
     await js(`document.querySelector('#toasts').replaceChildren()`);
+    await js(`document.querySelector('#view .list').append(h('div', { class: 'row' }, slot(null, 48), slot(null, 96), h('div', { class: 'row-main' }, 'placeholder')))`);
     await shot('31-update-arrow');
     await js(`${arrows}[0].click()`);
     await waitFor(`${arrows}.length === 0 && [...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).hidden && S.cfg.installed['modrinth:mOgUt4GM'] === '${newest.id}'`, 'Mod Menu updated by its arrow', 60000);

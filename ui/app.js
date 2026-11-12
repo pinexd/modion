@@ -69,8 +69,8 @@ function ago(iso) {
 }
 
 function slot(src, size) {
-  const img = h('img', { alt: '', src: src || Pixel.icon('missing'), class: src ? '' : 'px' });
-  img.addEventListener('error', () => { img.src = Pixel.icon('missing'); img.className = 'px'; }, { once: true });
+  const img = h('img', { alt: '', src: src || Pixel.icon('noicon'), class: src ? '' : 'px' });
+  img.addEventListener('error', () => { img.src = Pixel.icon('noicon'); img.className = 'px'; }, { once: true });
   return h('div', { class: `slot s${size}` }, img);
 }
 
