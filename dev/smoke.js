@@ -959,6 +959,10 @@ require('../main.js').ready.then(async (win) => {
     await waitFor(`${arrows}.length === 1 && /^Update All \\(1\\)$/.test([...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).textContent)`, 'one update offered');
     expect(await js(`${arrows}[0].closest('.row').textContent.includes('Mod Menu') && ${arrows}[0].title.startsWith('Update to ')`), 'the arrow is not on Mod Menu');
     await js(`document.querySelector('#toasts').replaceChildren()`);
+    // The arrow belongs to Remove: directly before it, the same height, its picture in the middle.
+    const fit = await js(`(() => { const u = ${arrows}[0], n = u.nextElementSibling, a = u.getBoundingClientRect(), b = n.getBoundingClientRect(), i = u.firstChild.getBoundingClientRect();
+      return { next: n.textContent, heights: [a.height, b.height], offY: (i.top + i.bottom - a.top - a.bottom) / 2, offX: (i.left + i.right - a.left - a.right) / 2 }; })()`);
+    expect(fit.next === 'Remove' && Math.abs(fit.heights[0] - fit.heights[1]) < 1 && Math.abs(fit.offY) < 1 && Math.abs(fit.offX) < 1, `the update arrow is not centred beside Remove: ${JSON.stringify(fit)}`);
     await js(`document.querySelector('#view .list').append(h('div', { class: 'row' }, slot(null, 48), slot(null, 96), h('div', { class: 'row-main' }, 'placeholder')))`);
     await shot('31-update-arrow');
     await js(`${arrows}[0].click()`);

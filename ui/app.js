@@ -1294,12 +1294,13 @@ function viewLibrary(v) {
             m && m.added && inst.fromPack && h('span', { class: 'added-note', title: 'You installed this yourself; it did not come with the modpack.' }, 'Added by you')),
           m && h('div', { class: 'faint row-title' }, f.name)),
         h('div', { class: 'row-actions' },
-          m && f.enabled && h('button', { class: 'up', hidden: true, 'data-file': f.file, ariaLabel: `Update ${m.title}`, onclick: (e) => { e.stopPropagation(); runUpdates(f.file); } }),
           check('Enabled', f.enabled, async (on, box) => {
             box.disabled = true; // the file is being renamed; a second click would target the old name
             try { await api('library.toggle', { type, file: f.file }); } catch (err) { fail(err); }
             refresh();
           }),
+          m && f.enabled && h('button', { class: 'up', hidden: true, 'data-file': f.file, ariaLabel: `Update ${m.title}`, onclick: (e) => { e.stopPropagation(); runUpdates(f.file); } },
+            h('img', { class: 'px', alt: '', src: Pixel.icon('up') })),
           btn('Remove', async (e) => {
             e.stopPropagation();
             const yes = await confirmScreen('Remove this file?', [`'${m ? m.title : f.name}' will be moved to the trash.`, f.name], 'Remove');
