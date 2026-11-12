@@ -798,12 +798,38 @@ function drawResults() {
   b.scroll = 0;
   const total = Number(res.total) || 0;
   const pages = Math.max(1, Math.ceil(total / (res.pageSize || 20)));
-  const turn = (d) => () => { b.page = Math.min(Math.max(b.page + d, 0), pages - 1); loadResults(); };
-  const prev = btn('< Prev', turn(-1), 'small'), next = btn('Next >', turn(1), 'small');
-  prev.disabled = b.page <= 0;
-  next.disabled = b.page >= pages - 1;
+  // Page bar: arrows, the pages either side of this one, "..." to type a page, and the last page.
+  const cur = b.page + 1;
+  const goPage = (n) => { b.page = Math.min(Math.max(n, 1), pages) - 1; loadResults(); };
+  const pg = (n) => h('button', { class: 'pg', title: `Page ${n.toLocaleString()}`, onclick: () => goPage(n) }, n.toLocaleString());
+  const arrow = (d, label) => h('button', { class: 'pg arrow', title: label, ariaLabel: label, disabled: d < 0 ? cur <= 1 : cur >= pages, onclick: () => goPage(cur + d) }, h('span', { class: d < 0 ? 'left' : 'right' }));
+  const dots = h('button', { class: 'pg dots', title: 'Go to page...', ariaLabel: 'Go to page', onclick: () => {
+    const box = h('input', { class: 'field pg-box', type: 'text', inputMode: 'numeric', placeholder: 'Page', ariaLabel: `Page number, 1 to ${pages}`, maxLength: 6 });
+    let done = false;
+    const back = () => { if (!done) { done = true; box.replaceWith(dots); } };
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); back(); return; }
+      if (e.key !== 'Enter') return;
+      const n = /^\d+$/.test(box.value.trim()) ? Number(box.value.trim()) : 0;
+      if (n < 1 || n > pages) { box.classList.add('bad'); box.title = `Pages go from 1 to ${pages.toLocaleString()}`; return; }
+      done = true;
+      goPage(n);
+    });
+    box.addEventListener('input', () => box.classList.remove('bad'));
+    box.addEventListener('blur', back);
+    dots.replaceWith(box);
+    box.focus();
+  } }, '...');
   fill(pager, h('div', { class: 'dim' }, `${total.toLocaleString()} result${total === 1 ? '' : 's'}`),
-    h('div', { class: 'bar' }, prev, h('span', {}, `Page ${b.page + 1} of ${pages.toLocaleString()}`), next),
+    h('div', { class: 'pages' },
+      arrow(-1, 'Previous page'),
+      pages > 2 && cur === pages && dots, // on the last page nothing follows, so "..." leads
+      cur > 1 && pg(cur - 1),
+      h('button', { class: 'pg on', ariaCurrent: 'page', title: `Page ${cur.toLocaleString()} of ${pages.toLocaleString()}` }, cur.toLocaleString()),
+      cur + 1 < pages && pg(cur + 1),
+      pages > 2 && cur < pages && dots,
+      cur < pages && pg(pages),
+      arrow(1, 'Next page')),
     h('div'));
 }
 

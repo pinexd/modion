@@ -893,6 +893,35 @@ require('../main.js').ready.then(async (win) => {
     }
   });
 
+  await step('page bar: neighbours, last page, and typing a page number', async () => {
+    await js(`invalidateResults({ source: 'modrinth', type: 'mod', query: '', categories: [] }); go('browse')`);
+    const labels = () => js(`[...document.querySelectorAll('#pager .pages > *')].map(x => x.classList.contains('arrow') ? (x.disabled ? '(' : '<') : x.textContent + (x.classList.contains('on') ? '*' : '')).join(' ')`);
+    const on = (n) => waitFor(`document.querySelector('#pager .pg.on') && document.querySelector('#pager .pg.on').textContent === '${n}' && S.browse.results && S.browse.page === ${n - 1}`, `page ${n}`);
+    await on(1);
+    const last = await js(`[...document.querySelectorAll('#pager .pg:not(.arrow)')].pop().textContent`);
+    expect(await labels() === `( 1* 2 ... ${last} <`, `first page bar: ${await labels()}`);
+    await js(`[...document.querySelectorAll('#pager .pg')].find(x => x.textContent === '2').click()`);
+    await on(2);
+    expect(await labels() === `< 1 2* 3 ... ${last} <`, `second page bar: ${await labels()}`);
+    // "..." becomes a box: a page out of range is refused, a good one is opened.
+    const type = (v, key) => js(`(() => { const b = document.querySelector('#pager .pg-box'); b.value = '${v}'; b.dispatchEvent(new KeyboardEvent('keydown', { key: '${key}', bubbles: true })); })()`);
+    await js(`document.querySelector('#pager .dots').click()`);
+    await type('0', 'Enter');
+    expect(await js(`document.querySelector('#pager .pg-box').classList.contains('bad')`) && await js(`S.browse.page`) === 1, 'page 0 was accepted');
+    await type('', 'Escape');
+    expect(await js(`Boolean(document.querySelector('#pager .dots')) && !document.querySelector('#pager .pg-box')`), 'Escape did not put the dots back');
+    await js(`document.querySelector('#pager .dots').click()`);
+    await type('5', 'Enter');
+    await on(5);
+    await shot('29-pages');
+    await js(`[...document.querySelectorAll('#pager .pg.arrow')].pop().click()`);
+    await on(6);
+    await js(`[...document.querySelectorAll('#pager .pg:not(.arrow)')].pop().click()`);
+    await waitFor(`S.browse.results && document.querySelector('#pager .pg.on') && document.querySelector('#pager .pg.on').textContent === '${last}'`, 'last page');
+    expect((await labels()).endsWith(`${last}* (`), `last page bar: ${await labels()}`);
+    await js(`invalidateResults({}); go('browse')`);
+  });
+
   await step('category filter, filter-mismatch warning, and back/forward buttons', async () => {
     await js(`go('browse')`);
     await waitFor(`S.browse.results && document.querySelectorAll('#view .multi-menu .check').length > 8`, 'category menu');
