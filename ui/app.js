@@ -284,7 +284,7 @@ async function adoptPackIcon(id, url) {
 /* ---------- toasts and the download bar ---------- */
 
 function toast(title, text, { tone = 'yellow', icon, time = 5000 } = {}) {
-  const el = h('div', { class: 'toast' },
+  const el = h('div', { class: `toast t-${tone}` },
     slot(icon || Pixel.icon('logo'), 48),
     h('div', { class: 'msg' }, h('div', { class: tone }, title), text && h('div', {}, text)));
   if (!icon) el.querySelector('img').className = 'px';

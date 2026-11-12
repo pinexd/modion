@@ -55,7 +55,26 @@
 @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
 
 /* Notifications and the download bar. */
-.toast { backdrop-filter: blur(8px); background: rgba(27, 27, 27, .92); box-shadow: 0 10px 28px rgba(0, 0, 0, .55); }
+/* Notifications: frosted cards that float over the page, with a lit strip down the left. */
+#toasts { gap: 10px; }
+.toast {
+  position: relative; overflow: hidden; padding: 12px 16px 12px 18px;
+  background: linear-gradient(180deg, rgba(58, 58, 58, .88), rgba(30, 30, 30, .9));
+  border: 1px solid #0c0c0c; border-left-width: 1px; border-left-color: #0c0c0c;
+  backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow: inset 0 1px rgba(255, 255, 255, .1), inset 0 -1px rgba(0, 0, 0, .4), 0 14px 32px rgba(0, 0, 0, .55), 0 2px 6px rgba(0, 0, 0, .4);
+  animation: toast-in .32s var(--ease) both;
+}
+.toast::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: linear-gradient(180deg, #5bea70, var(--green)); box-shadow: 0 0 12px rgba(39, 206, 64, .55); }
+.toast::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, rgba(39, 206, 64, .09), transparent 45%); pointer-events: none; }
+.toast > * { position: relative; z-index: 1; } /* the tint lies under the picture and text */
+.toast.t-red::before { background: linear-gradient(180deg, #ff8a8a, #c62f2f); box-shadow: 0 0 12px rgba(230, 70, 70, .6); }
+.toast.t-red::after { background: linear-gradient(100deg, rgba(230, 70, 70, .12), transparent 45%); }
+.toast .slot { box-shadow: 0 4px 10px rgba(0, 0, 0, .55), inset 0 0 0 1px rgba(0, 0, 0, .5); }
+.toast .msg > :first-child { font-weight: 700; text-shadow: 0 1px 0 rgba(0, 0, 0, .5); }
+.toast.out { animation: toast-out .2s ease-in both; }
+@keyframes toast-in { from { opacity: 0; transform: translateX(40px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { to { opacity: 0; transform: translateX(40px) scale(.96); } }
 .xp { overflow: hidden; }
 .xp i { background: linear-gradient(90deg, #1fae36, var(--green-hi)); box-shadow: 0 0 8px rgba(39, 206, 64, .6); transition: width .25s var(--ease); }
 
