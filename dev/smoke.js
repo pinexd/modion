@@ -984,19 +984,29 @@ require('../main.js').ready.then(async (win) => {
     const labels = () => js(`[...document.querySelectorAll('#pager .pages > *')].map(x => x.classList.contains('arrow') ? (x.disabled ? '(' : '<') : x.textContent + (x.classList.contains('on') ? '*' : '')).join(' ')`);
     const on = (n) => waitFor(`document.querySelector('#pager .pg.on') && document.querySelector('#pager .pg.on').textContent === '${n}' && S.browse.results && S.browse.page === ${n - 1}`, `page ${n}`);
     await on(1);
-    // "Hide installed" takes installed projects off the page, and says how many.
-    const rows = () => js(`document.querySelectorAll('#results .row.click').length`);
+    // "Hide installed" leaves installed projects out and still fills the page from further down the list.
+    const titles = () => js(`[...document.querySelectorAll('#results .row.click .row-title:first-child')].map(x => x.textContent)`);
     const tick = () => js(`[...document.querySelectorAll('#view .bar .check')].find(l => l.textContent === 'Hide installed').querySelector('input').click()`);
-    const all = await rows();
-    const fakeKey = await js(`(() => { const p = S.browse.results.hits[0], k = p.source + ':' + p.id; const had = k in S.cfg.installed; S.cfg.installed[k] = S.cfg.installed[k] || 'x'; return had ? '' : k; })()`);
+    const plain = await titles();
+    // Pretend the first, third and fourth results are installed.
+    const faked = await js(`(() => { const out = []; for (const n of [0, 2, 3]) { const p = S.browse.results.hits[n], k = p.source + ':' + p.id; if (!(k in S.cfg.installed)) { S.cfg.installed[k] = 'x'; out.push(k); } } return out; })()`);
+    const gone = [plain[0], plain[2], plain[3]];
     await tick();
-    await waitFor(`document.querySelector('#results .hidden-note')`, 'note about hidden projects');
-    const hiddenCount = Number((await js(`document.querySelector('#results .hidden-note').textContent`)).match(/^\d+/)[0]);
-    expect(hiddenCount >= 1 && await rows() === all - hiddenCount, `hide installed: ${await rows()} of ${all} rows, ${hiddenCount} hidden`);
+    await waitFor(`S.browse.results && S.browse.results.filtered && document.querySelector('#results .hidden-note')`, 'filtered results');
+    const filled = await titles();
+    expect(filled.length === plain.length && !filled.some((t) => gone.includes(t)) && filled.some((t) => !plain.includes(t)), `hide installed did not refill the page: ${filled.length} of ${plain.length} rows, first "${filled[0]}"`);
+    expect(/installed projects? (is|are) left out/.test(await js(`document.querySelector('#results .hidden-note').textContent`)), 'no note about what was left out');
+    // The next page carries on without repeating or skipping anything.
+    await js(`[...document.querySelectorAll('#pager .pg')].find(x => x.textContent === '2').click()`);
+    await waitFor(`S.browse.results && S.browse.page === 1 && document.querySelector('#pager .pg.on').textContent === '2'`, 'second filtered page');
+    const second = await titles();
+    expect(second.length === plain.length && !second.some((t) => filled.includes(t) || gone.includes(t)), `the second page repeats or shows hidden projects: ${JSON.stringify(second.filter((t) => filled.includes(t) || gone.includes(t)))}`);
     await shot('30-hide-installed');
     await tick();
-    expect(await rows() === all && !(await js(`Boolean(document.querySelector('#results .hidden-note'))`)), 'unticking did not bring the projects back');
-    if (fakeKey) await js(`delete S.cfg.installed[${JSON.stringify(fakeKey)}]`);
+    await waitFor(`S.browse.results && !S.browse.results.filtered && S.browse.page === 0`, 'unfiltered results again');
+    expect(JSON.stringify(await titles()) === JSON.stringify(plain), 'unticking did not bring the projects back');
+    for (const k of faked) await js(`delete S.cfg.installed[${JSON.stringify(k)}]`);
+    await on(1);
     const last = await js(`[...document.querySelectorAll('#pager .pg:not(.arrow)')].pop().textContent`);
     expect(await labels() === `( 1* 2 ... ${last} <`, `first page bar: ${await labels()}`);
     await js(`[...document.querySelectorAll('#pager .pg')].find(x => x.textContent === '2').click()`);

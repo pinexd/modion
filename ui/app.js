@@ -759,6 +759,52 @@ function hitRow(p) {
       install));
 }
 
+// "Hide installed": pages are filled after the installed projects are taken out, so the
+// site is read further ahead than one page. What has been read is kept while the search
+// stays the same, and the next page carries on from there. The first pages are exact; a
+// jump far ahead starts reading at that point of the site's own list instead of from the top.
+const EXACT_PAGES = 25, READ_AHEAD = 15;
+let unhidden = null;
+async function searchWithoutInstalled(ask, current) {
+  const b = S.browse;
+  const anchor = b.page < EXACT_PAGES ? 0 : b.page;
+  const sig = JSON.stringify([ask, anchor, S.cfg.activeInstanceId]);
+  if (!unhidden || unhidden.sig !== sig) unhidden = { sig, anchor, hits: [], seen: new Set(), next: anchor, done: false, total: 0, hidden: 0, size: 20 };
+  const acc = unhidden;
+  const need = () => (b.page - acc.anchor + 1) * acc.size;
+  let asked = 0;
+  while (acc.hits.length < need() && !acc.done && asked < READ_AHEAD) {
+    const pages = [acc.next, acc.next + 1, acc.next + 2];
+    const got = await Promise.all(pages.map((page) => api('search', { ...ask, page })));
+    if (!current() || unhidden !== acc) return null; // the search changed meanwhile
+    asked += pages.length;
+    for (const res of got) {
+      if (acc.done) break;
+      acc.total = Number(res.total) || 0;
+      acc.size = res.pageSize || acc.size;
+      for (const p of res.hits) {
+        const key = `${p.source}:${p.id}`;
+        if (acc.seen.has(key)) continue; // lists shift while they are read
+        acc.seen.add(key);
+        if (key in S.cfg.installed) acc.hidden++; else acc.hits.push(p);
+      }
+      acc.next++;
+      if (!res.hits.length || acc.next * acc.size >= acc.total) acc.done = true;
+    }
+  }
+  // Past the end (the last pages shrink once installed projects are gone): show the real last page.
+  const pagesHere = Math.max(1, Math.ceil(acc.hits.length / acc.size));
+  if (acc.done && b.page - acc.anchor >= pagesHere) b.page = acc.anchor + pagesHere - 1;
+  const from = (b.page - acc.anchor) * acc.size;
+  return {
+    hits: acc.hits.slice(from, from + acc.size),
+    // How many there are without the installed ones: exact once everything was read, an estimate until then.
+    total: acc.done ? acc.anchor * acc.size + acc.hits.length : Math.max(acc.total - acc.hidden, from + acc.size + 1),
+    page: b.page, pageSize: acc.size,
+    filtered: { hidden: acc.hidden, short: !acc.done && acc.hits.length < from + acc.size },
+  };
+}
+
 async function loadResults() {
   const b = S.browse;
   const token = ++searchToken;
@@ -769,7 +815,8 @@ async function loadResults() {
   let res = null, error = null;
   try {
     const { source, type, query, gameVersion, loader, categories, sort, page } = b;
-    res = await api('search', { source, type, query, gameVersion, loader, categories, sort, page });
+    const ask = { source, type, query, gameVersion, loader, categories, sort };
+    res = b.hideInstalled && type !== 'modpack' ? await searchWithoutInstalled(ask, () => token === searchToken) : await api('search', { ...ask, page });
   } catch (e) {
     error = e;
   }
@@ -796,12 +843,11 @@ function drawResults() {
   const b = S.browse, res = b.results;
   const list = $('#results'), pager = $('#pager');
   if (!list || !res) return;
-  // "Hide installed" takes what the selected instance already has off the page being shown.
-  const mine = (p) => `${p.source}:${p.id}` in S.cfg.installed;
-  const hidden = b.hideInstalled && b.type !== 'modpack' ? res.hits.filter(mine).length : 0;
-  const shown = hidden ? res.hits.filter((p) => !mine(p)) : res.hits;
-  fill(list, ...(shown.length ? shown.map(hitRow) : [message(h('p', { class: 'dim' }, res.hits.length ? 'Everything on this page is already installed. Try the next page.' : 'Nothing found. Try fewer filters.'))]),
-    hidden && shown.length && h('div', { class: 'row faint hidden-note' }, `${hidden} installed ${hidden === 1 ? 'project is' : 'projects are'} hidden on this page.`));
+  // With "Hide installed" the page arrives already filled without the installed projects.
+  const fl = res.filtered;
+  fill(list, ...(res.hits.length ? res.hits.map(hitRow) : [message(h('p', { class: 'dim' }, fl && fl.hidden ? (fl.short ? 'Everything read so far is already installed. The next page reads on.' : 'Everything that matches is already installed.') : 'Nothing found. Try fewer filters.'))]),
+    fl && fl.hidden > 0 && res.hits.length > 0 && h('div', { class: 'row faint hidden-note' },
+      `${fl.hidden.toLocaleString()} installed ${fl.hidden === 1 ? 'project is' : 'projects are'} left out so far.${fl.short ? ' This page is short because Modion stopped reading ahead; the next page reads on.' : ''}`));
   list.scrollTop = b.scroll;
   b.scroll = 0;
   const total = Number(res.total) || 0;
@@ -933,7 +979,8 @@ function viewBrowse(v) {
       b.type !== 'modpack' && check('Hide installed', Boolean(b.hideInstalled), (on) => {
         b.hideInstalled = on;
         try { localStorage.setItem('hideInstalled', on ? '1' : ''); } catch {}
-        if (b.results) drawResults();
+        invalidateResults({});
+        loadResults();
       })),
     mismatch && h('div', { class: 'bar warn' },
       h('span', {}, `These filters do not match "${inst.name}" (${instLabel(inst)}). What is listed here may have no file that works in that instance.`),
