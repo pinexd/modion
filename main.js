@@ -141,6 +141,11 @@ game.onChange(() => {
   if (store && w && !w.webContents.isDestroyed()) w.webContents.send('running', runningIds());
 });
 
+function realKeyring() {
+  if (process.platform !== 'linux') return true;
+  try { return !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend()); } catch { return false; }
+}
+
 function publicConfig() {
   const { instances: list, activeInstanceId } = store.config;
   return {
@@ -1071,7 +1076,9 @@ const ready = !first ? Promise.resolve(null) : app.whenReady().then(() => {
   account = new Account({
     dir,
     openExternal: (target) => shell.openExternal(target),
-    seal: keyring ? (s) => safeStorage.encryptString(s).toString('base64') : null,
+    // Without a real keyring Electron on Linux falls back to a fixed, well-known key. That
+    // protects nothing, so the token is then stored (and reported) as not encrypted.
+    seal: keyring && realKeyring() ? (s) => safeStorage.encryptString(s).toString('base64') : null,
     open: keyring ? (s) => safeStorage.decryptString(Buffer.from(s, 'base64')) : null,
   });
   curseforge.setKey(store.config.curseforgeKey || fallbackKey());
