@@ -65,6 +65,8 @@ function inspect(file) {
   }
 }
 
+const FOLDER = { mod: 'mods', resourcepack: 'resourcepacks', shader: 'shaderpacks', datapack: 'datapacks' };
+
 // The downloads a pack asks for, as items for the downloader, plus what had to be left out.
 // What to download for a pack: `items` to fetch, `skipped` files that cannot be had at all,
 // and `blocked` files whose authors only allow downloads from the CurseForge website (those
@@ -95,17 +97,27 @@ async function downloads(pack, gameDir, curseforge) {
   for (let i = 0; i < wanted.length; i += 50) {
     for (const v of await curseforge.getFiles(wanted.slice(i, i + 50))) found.set(Number(v.id), v);
   }
+  // The manifest does not say what kind of file each one is. Jars are mods; for the rest
+  // CurseForge is asked what the project is, so shaders do not land among the resource packs.
+  const loose = [...found.values()].filter((v) => !/\.jar$/i.test((v.file || v.expected || {}).filename || ''));
+  let kind = new Map();
+  if (loose.length && typeof curseforge.kinds === 'function') {
+    try { kind = await curseforge.kinds(loose.map((v) => v.projectId)); } catch { /* sorted by file name below */ }
+  }
+  const typeOf = (v, filename) => {
+    if (/\.jar$/i.test(filename)) return 'mod';
+    const k = kind.get(String(v.projectId));
+    return FOLDER[k] && k !== 'mod' ? k : 'resourcepack';
+  };
   for (const id of wanted) {
     const v = found.get(id);
     if (!v) { skipped.push({ title: `File ${id}`, reason: 'CurseForge no longer has it' }); continue; }
-    // The manifest does not say what kind of file each one is; jars are mods, zips are resource packs.
     if (!v.file) {
       const filename = (v.expected && v.expected.filename) || '';
-      blocked.push({ projectId: String(v.projectId), fileId: String(v.id), title: v.name, filename, type: /\.zip$/i.test(filename) ? 'resourcepack' : 'mod' });
+      blocked.push({ projectId: String(v.projectId), fileId: String(v.id), title: v.name, filename, type: typeOf(v, filename) });
       continue;
     }
-    const folder = /\.jar$/i.test(v.file.filename) ? 'mods' : 'resourcepacks';
-    const full = inside(gameDir, path.join(folder, path.basename(v.file.filename)));
+    const full = inside(gameDir, path.join(FOLDER[typeOf(v, v.file.filename)], path.basename(v.file.filename)));
     items.push({ ...v.file, dir: path.dirname(full), filename: path.basename(full) });
   }
   return { items, skipped, blocked };

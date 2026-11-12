@@ -66,7 +66,8 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
   instance and Play asks Prism to launch it, with the account and Java Prism manages.
   Instances Modion cannot start itself get the launcher that owns them: "Open Launcher".
 - **Instances page** – create an instance, import a modpack (Modrinth `.mrpack` or a
-  CurseForge zip; the latter needs your CurseForge API key), and rename, delete or open the
+  CurseForge zip; the latter needs your CurseForge API key, and its shaders, resource packs
+  and data packs each go to their own folder), and rename, delete or open the
   folder of instances Modion made. Instances added from other launchers can be selected and
   forgotten, never renamed or deleted.
 - **Direct launching** – Modion can also start the game itself: vanilla back to

@@ -647,6 +647,23 @@ require('../main.js').ready.then(async (win) => {
     writeZip(packFile, [{ name: 'manifest.json', data: Buffer.from(JSON.stringify({
       name: 'Left Out Pack', minecraft: { version: '1.21.1', modLoaders: [{ id: 'fabric-0.16.0', primary: true }] }, overrides: 'overrides',
       files: [1, 2, 3].map((n) => ({ projectID: n * 10, fileID: n, required: true })) })) }]);
+    // Files that are not jars are sorted by what CurseForge says the project is.
+    {
+      const zipFile = (n) => ({ url: 'https://edge.forgecdn.net/x', filename: `${n}.zip`, size: 1 });
+      const got = { 1: { id: '1', projectId: '10', name: 'a', file: { ...zipFile('a'), filename: 'a.jar' } }, 2: { id: '2', projectId: '20', name: 'shader', file: zipFile('shader') },
+        3: { id: '3', projectId: '30', name: 'textures', file: zipFile('textures') }, 4: { id: '4', projectId: '40', name: 'held', file: null, expected: { filename: 'held.zip', size: 1 } },
+        5: { id: '5', projectId: '50', name: 'unknown', file: zipFile('unknown') } };
+      const stub = { hasKey: () => true, getFiles: async (ids) => ids.map((i) => got[i]), kinds: async () => new Map([['10', 'mod'], ['20', 'shader'], ['30', 'resourcepack'], ['40', 'shader']]) };
+      const fake = { kind: 'curseforge', files: [1, 2, 3, 4, 5].map((n) => ({ projectID: n * 10, fileID: n, required: true })) };
+      const modpack = require('../src/modpack');
+      const sorted = await modpack.downloads(fake, path.join(work, 'sorted'), stub);
+      const where = sorted.items.map((i) => `${path.basename(i.dir)}/${i.filename}`).join();
+      expect(where === 'mods/a.jar,shaderpacks/shader.zip,resourcepacks/textures.zip,resourcepacks/unknown.zip', `pack files were sorted as ${where}`);
+      expect(sorted.blocked.length === 1 && sorted.blocked[0].type === 'shader', `a left-out shader is recorded as ${JSON.stringify(sorted.blocked)}`);
+      // When CurseForge cannot be asked, the pack still installs, by the old rule.
+      const plain = await modpack.downloads(fake, path.join(work, 'sorted'), { ...stub, kinds: async () => { throw new Error('down'); } });
+      expect(plain.items.map((i) => path.basename(i.dir)).join() === 'mods,resourcepacks,resourcepacks,resourcepacks', 'a failed lookup stopped the pack');
+    }
     const opens = [];
     let closeFirst = true;
     web.open = async (o) => {

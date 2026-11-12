@@ -188,6 +188,16 @@ async function updates(installed, opts = {}) {
   return out;
 }
 
+// What kind of project each one is ('mod', 'resourcepack', 'shader', ...), by project ID.
+// A modpack's manifest lists files without saying this.
+async function kinds(projectIds) {
+  const ids = [...new Set(projectIds.map(Number).filter(Number.isInteger))], out = new Map();
+  for (let i = 0; i < ids.length; i += 200) {
+    for (const m of arr((await cf('/mods', null, { modIds: ids.slice(i, i + 200) })).data)) if (m && m.id) out.set(String(m.id), typeOf(m));
+  }
+  return out;
+}
+
 async function brief(projectId) {
   const m = await cfObject(`/mods/${encodeURIComponent(projectId)}`);
   return { title: m.name || String(projectId), icon: (m.logo && m.logo.thumbnailUrl) || null, url: (m.links && m.links.websiteUrl) || null };
@@ -257,4 +267,4 @@ async function testKey() {
   return true;
 }
 
-module.exports = { identify, setKey, getKey, hasKey, search, project, versions, getVersion, getFiles, latest, updates, brief, categories, fingerprints, testKey };
+module.exports = { identify, setKey, getKey, hasKey, search, project, versions, getVersion, getFiles, latest, updates, kinds, brief, categories, fingerprints, testKey };
