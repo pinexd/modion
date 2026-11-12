@@ -698,6 +698,7 @@ async function doInstall(req) {
   try {
     const r = await api('install', req);
     if (r && r.installed_ids) S.cfg.installed = r.installed_ids;
+    updateCache.clear(); // what is installed changed
     for (const s of (r && r.skipped) || []) toast('Heads up', `${s.title}: ${s.reason}`, { tone: 'gold', time: 9000 });
     if (!req.versionId && !req.gameVersion) {
       toast('Newest file installed', 'This instance has no game version set, so compatibility was not checked.', { tone: 'gold', time: 9000 });
@@ -710,7 +711,7 @@ async function doInstall(req) {
     busy.delete(key);
     paintInstalls();
   }
-  if (fromWebsite) doWebInstall(fromWebsite);
+  if (fromWebsite) return doWebInstall(fromWebsite); // awaited, so files updated in a row take their turn
 }
 
 // Opens the file's own page on CurseForge. The person presses Download there; Modion
@@ -1133,6 +1134,8 @@ function viewLog(v, inst) {
 
 /* ---------- library ---------- */
 
+const updateCache = new Map(); // "instance:type" -> what library.updates found, until something is installed
+
 function viewLibrary(v) {
   const inst = activeInst();
   const lib = S.library;
@@ -1145,14 +1148,71 @@ function viewLibrary(v) {
   }
   if (lib.type === 'log') { viewLog(v, inst); return; }
   const list = h('div', { class: 'list' }, loading('Reading folder...'));
-  const summary = h('span', { class: 'dim' });
-  add(v, h('div', { class: 'bar' }, summary,
-      h('div', { class: 'push' }, btn('Open Folder', () => api('library.openFolder', { type: lib.type }).catch(fail)))),
+  const summary = h('span', { class: 'dim' }), note = h('span', { class: 'faint small' });
+  const updateAll = btn('Update All', () => runUpdates(), 'green');
+  updateAll.hidden = true;
+  add(v, h('div', { class: 'bar' }, summary, note,
+      h('div', { class: 'push bar' }, updateAll, btn('Open Folder', () => api('library.openFolder', { type: lib.type }).catch(fail)))),
     list);
 
   const type = lib.type;
   const stale = () => S.view !== 'library' || lib.type !== type || !list.isConnected;
   let latest = 0;
+  // Newer files for what is installed: { file: { source, projectId, versionId, versionName } }.
+  // Asked once per visit and again after anything was updated.
+  const cacheKey = `${inst.id}:${type}`;
+  let shownFiles = [], updating = false;
+  const offers = () => (updateCache.get(cacheKey) || { updates: {} }).updates;
+  const paintUpdates = () => {
+    const waiting = shownFiles.filter((f) => offers()[f.file]);
+    updateAll.hidden = !waiting.length;
+    updateAll.disabled = updating;
+    updateAll.textContent = updating ? 'Updating...' : `Update All (${waiting.length})`;
+    for (const b of list.querySelectorAll('.up')) { b.hidden = !offers()[b.dataset.file]; b.disabled = updating; if (!b.hidden) b.title = `Update to ${offers()[b.dataset.file].versionName || 'the newest file'}`; }
+    const un = (updateCache.get(cacheKey) || {}).unchecked || [];
+    note.textContent = un.length ? `${un.join(' and ')} could not be asked about updates.` : '';
+  };
+  const lookForUpdates = async () => {
+    if (updateCache.has(cacheKey)) { paintUpdates(); return; }
+    try {
+      const found = await api('library.updates', { type });
+      updateCache.set(cacheKey, { updates: (found && found.updates) || {}, unchecked: (found && found.unchecked) || [] });
+    } catch { return; } // offline: no arrows, and asked again on the next visit
+    if (!stale()) paintUpdates();
+  };
+  const metaOf = new Map();
+  const updateOne = (file) => {
+    const u = offers()[file], m = metaOf.get(file);
+    if (!u || !m) return Promise.resolve();
+    return doInstall({ ...installTarget(), source: u.source, projectId: u.projectId, versionId: u.versionId, type, title: m.title, icon: m.icon });
+  };
+  // One file (from its arrow) or all of them. In an instance made from a modpack, updating
+  // everything is asked about twice: the pack's mods were chosen to work together.
+  async function runUpdates(only) {
+    if (updating) return;
+    const files = only ? [only] : shownFiles.filter((f) => offers()[f.file]).map((f) => f.file);
+    if (!files.length) return;
+    if (!only) {
+      const n = files.length, mods = `${n} file${n === 1 ? '' : 's'}`;
+      if (inst.fromPack) {
+        if (!(await confirmScreen('Update everything in this modpack?', [
+          `"${inst.name}" was made from a modpack. Its mods were picked and configured to work together at these exact versions.`,
+          `Updating all ${mods} at once is very likely to break the pack: crashes on start, missing recipes, worlds that no longer load.`,
+          'Updating single mods with their own arrow is much safer.'], 'Continue'))) return;
+        if (!(await confirmScreen('Are you sure?', [
+          `This replaces ${mods} in "${inst.name}" with newer ones. There is no undo; the old files go to the trash.`,
+          'Make a copy of your worlds first if they matter to you.'], `Update All ${n}`))) return;
+      } else if (!(await confirmScreen('Update everything?', [`${mods} in "${inst.name}" will be replaced with newer ones.`, 'The old files go to the trash.'], `Update All ${n}`))) return;
+    }
+    updating = true;
+    paintUpdates();
+    for (const file of files) await updateOne(file);
+    updating = false;
+    updateCache.delete(cacheKey);
+    if (!only && !stale()) toast('Updates finished', `${files.length} file${files.length === 1 ? '' : 's'} in ${inst.name}.`, { icon: inst.icon });
+    try { setConfig(await api('config.get')); } catch {}
+    if (!stale()) refresh();
+  }
   const refresh = async () => {
     const mine = ++latest; // a slower, older listing must not overwrite a newer one
     let res = null, error = null;
@@ -1165,6 +1225,9 @@ function viewLibrary(v) {
     }
     const off = res.files.filter((f) => !f.enabled).length;
     summary.textContent = `${res.files.length} file${res.files.length === 1 ? '' : 's'}${off ? `, ${off} disabled` : ''}`;
+    shownFiles = res.files;
+    metaOf.clear();
+    for (const f of res.files) if (f.meta) metaOf.set(f.file, f.meta);
     if (!res.files.length) {
       fill(list, message(
         h('p', {}, `No ${TYPES[type].toLowerCase()} in this instance yet`),
@@ -1179,9 +1242,12 @@ function viewLibrary(v) {
         slot(m && m.icon, 48),
         h('div', { class: 'row-main' },
           title,
-          h('div', { class: 'faint row-title' }, [m && m.versionName, m ? SOURCES[m.source] || m.source : 'Unrecognised file', fmtSize(f.size)].filter(Boolean).join('  |  ')),
+          h('div', { class: 'faint row-title' }, [m && m.versionName, m ? SOURCES[m.source] || m.source : 'Unrecognised file', fmtSize(f.size)].filter(Boolean).join('  |  '),
+            // In an instance made from a modpack: what was put in afterwards.
+            m && m.added && inst.fromPack && h('span', { class: 'added-note', title: 'You installed this yourself; it did not come with the modpack.' }, 'Added by you')),
           m && h('div', { class: 'faint row-title' }, f.name)),
         h('div', { class: 'row-actions' },
+          m && f.enabled && h('button', { class: 'up', hidden: true, 'data-file': f.file, ariaLabel: `Update ${m.title}`, onclick: (e) => { e.stopPropagation(); runUpdates(f.file); } }),
           check('Enabled', f.enabled, async (on, box) => {
             box.disabled = true; // the file is being renamed; a second click would target the old name
             try { await api('library.toggle', { type, file: f.file }); } catch (err) { fail(err); }
@@ -1198,6 +1264,8 @@ function viewLibrary(v) {
             refresh();
           }, 'small')));
     }));
+    paintUpdates();
+    lookForUpdates();
   };
   refresh();
 }
@@ -1642,10 +1710,11 @@ async function instanceSettings(i) {
   args.addEventListener('input', drawMemory);
   drawMemory();
 
+  const packBox = check('This instance is a modpack', Boolean(i.fromPack), () => {});
   const save = async () => {
     try {
       setConfig(await api('instances.setSettings', {
-        id: i.id, java, jvmArgs: args.value, env: env.value,
+        id: i.id, java, jvmArgs: args.value, env: env.value, fromPack: packBox.querySelector('input').checked,
         memory: auto || usesOwnMemory(args.value) ? null : Number(slider.value),
       }));
       closeScreen();
@@ -1665,7 +1734,9 @@ async function instanceSettings(i) {
         h('div', { class: 'panel' }, h('h2', {}, 'Java arguments'), args,
           h('p', { class: 'label' }, 'Added after Modion\'s own arguments, so they take precedence. Put quotes around a value that contains spaces.')),
         h('div', { class: 'panel' }, h('h2', {}, 'Environment variables'), env,
-          h('p', { class: 'label' }, 'Set for the game only, in addition to the ones Modion itself runs with.')))),
+          h('p', { class: 'label' }, 'Set for the game only, in addition to the ones Modion itself runs with.')),
+        h('div', { class: 'panel' }, h('h2', {}, 'Modpack'), h('div', { class: 'bar' }, packBox),
+          h('p', { class: 'label' }, 'Set by itself for modpacks Modion installs. For a modpack instance, the Library marks mods you add yourself, and "Update All" warns twice, because a pack\'s mods are chosen to work together.')))),
     [btn('Cancel', closeScreen), btn('Save', save, 'green')], render);
 }
 

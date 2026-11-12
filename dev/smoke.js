@@ -894,6 +894,73 @@ require('../main.js').ready.then(async (win) => {
     }
   });
 
+  await step('library updates: arrow, Update All, the modpack warnings, and the added-by-you mark', async () => {
+    const call = (method, args = {}) => js(`window.modion.call('${method}', ${JSON.stringify(args)})`);
+    const versions = (await require('../src/modrinth').versions('modmenu', { type: 'mod', gameVersion: '1.21.1', loader: 'fabric' })).filter((v) => v.channel === 'release' && v.file);
+    const newest = versions[0], old = versions[versions.length - 1];
+    expect(versions.length > 1, 'Mod Menu has only one release for 1.21.1; this check needs two');
+    const putOld = async () => expect((await call('install', { source: 'modrinth', projectId: 'mOgUt4GM', versionId: old.id, type: 'mod', gameVersion: '1.21.1', loader: 'fabric', title: 'Mod Menu' })).ok, 'the old Mod Menu could not be installed');
+    const arrows = `[...document.querySelectorAll('#view .up')].filter(b => !b.hidden)`;
+    const openLibrary = async () => { await js(`updateCache.clear(); S.library.type = 'mod'; go('browse'); go('library')`); await waitFor(`document.querySelectorAll('#view .list .row').length > 0`, 'library rows'); };
+    const press = (label) => js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === ${JSON.stringify(label)}).click()`);
+    // An instance of its own, so nothing else in this run is disturbed.
+    const before = await js(`S.cfg.activeInstanceId`);
+    const made = await call('instances.create', { name: 'Updates', gameVersion: '1.21.1', loader: 'fabric' });
+    expect(made.ok, `could not create an instance: ${JSON.stringify(made).slice(0, 200)}`);
+    const mine = made.data.instances.find((i) => i.name === 'Updates'), id = mine.id;
+    await call('instances.setActive', { id });
+    await js(`api('config.get').then(setConfig)`);
+    const jars = (prefix) => { try { return fs.readdirSync(path.join(mine.path, 'mods')).filter((m) => m.startsWith(prefix)); } catch { return []; } };
+
+    // One file, by its arrow.
+    await putOld();
+    await openLibrary();
+    await waitFor(`${arrows}.length === 1 && /^Update All \\(1\\)$/.test([...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).textContent)`, 'one update offered');
+    expect(await js(`${arrows}[0].closest('.row').textContent.includes('Mod Menu') && ${arrows}[0].title.startsWith('Update to ')`), 'the arrow is not on Mod Menu');
+    await js(`document.querySelector('#toasts').replaceChildren()`);
+    await shot('31-update-arrow');
+    await js(`${arrows}[0].click()`);
+    await waitFor(`${arrows}.length === 0 && [...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).hidden && S.cfg.installed['modrinth:mOgUt4GM'] === '${newest.id}'`, 'Mod Menu updated by its arrow', 60000);
+    expect(jars('modmenu').length === 1 && jars('modmenu')[0] === newest.file.filename, `after the update: ${jars('modmenu')}`);
+
+    // Everything at once, in an instance marked as a modpack: two warnings, and Cancel on the second changes nothing.
+    await putOld();
+    expect((await call('instances.setSettings', { id, fromPack: true, java: '', jvmArgs: '', env: '', memory: null })).ok, 'the instance could not be marked as a modpack');
+    await js(`api('config.get').then(setConfig)`);
+    await openLibrary();
+    await waitFor(`${arrows}.length === 1`, 'update offered again');
+    const all = () => js(`[...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).click()`);
+    await all();
+    await waitFor(`!document.querySelector('#overlay').hidden && /made from a modpack/.test(document.querySelector('#overlay').textContent)`, 'first modpack warning');
+    await shot('32-update-all-warning');
+    await press('Continue');
+    await waitFor(`/Are you sure/.test(document.querySelector('#overlay .modal-title').textContent)`, 'second modpack warning');
+    await press('Cancel');
+    await sleep(500);
+    expect(jars('modmenu')[0] === old.file.filename, 'Cancel on the second warning still updated');
+    await all();
+    await waitFor(`!document.querySelector('#overlay').hidden`, 'first warning again');
+    await press('Continue');
+    await waitFor(`/Are you sure/.test(document.querySelector('#overlay .modal-title').textContent)`, 'second warning again');
+    await press('Update All 1');
+    await waitFor(`${arrows}.length === 0 && S.cfg.installed['modrinth:mOgUt4GM'] === '${newest.id}'`, 'Update All finished', 60000);
+    expect(jars('modmenu').length === 1 && jars('modmenu')[0] === newest.file.filename, `after Update All: ${jars('modmenu')}`);
+
+    // A mod installed into a modpack instance afterwards is marked; what was there before is not, also after its update.
+    expect((await call('install', { source: 'modrinth', projectId: 'AANobbMI', type: 'mod', gameVersion: '1.21.1', loader: 'fabric', title: 'Sodium' })).ok, 'Sodium could not be installed');
+    await openLibrary();
+    const marked = await js(`[...document.querySelectorAll('#view .list .row')].filter(r => r.querySelector('.added-note')).map(r => r.querySelector('.row-title').textContent)`);
+    expect(marked.length === 1 && marked[0] === 'Sodium', `marked as added: ${JSON.stringify(marked)}`);
+    await shot('33-added-by-you');
+    await js(`[...document.querySelectorAll('#view .list .row')].find(r => r.querySelector('.added-note')).querySelector('.btn').click()`);
+    await waitFor(`!document.querySelector('#overlay').hidden`, 'remove question');
+    await press('Remove');
+    await waitFor(`!('modrinth:AANobbMI' in S.cfg.installed)`, 'Sodium removed again');
+    await call('instances.delete', { id });
+    await call('instances.setActive', { id: before });
+    await js(`api('config.get').then((c) => { setConfig(c, { follow: true }); go('browse'); })`);
+  });
+
   await step('page bar: neighbours, last page, and typing a page number', async () => {
     await js(`invalidateResults({ source: 'modrinth', type: 'mod', query: '', categories: [] }); go('browse')`);
     const labels = () => js(`[...document.querySelectorAll('#pager .pages > *')].map(x => x.classList.contains('arrow') ? (x.disabled ? '(' : '<') : x.textContent + (x.classList.contains('on') ? '*' : '')).join(' ')`);

@@ -114,6 +114,11 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
   fits the instance and pulls in required dependencies; the *Files* tab installs a specific one.
 - **Library** – what is in the instance, including files Modion did not install (identified
   by hash through Modrinth). Disable, re-enable or remove (to the trash).
+- **Updates** – in the Library, a green arrow appears beside a file when the site it came
+  from has a newer one for the instance's game version and loader; "Update All" does them
+  in one go. In an instance made from a modpack, "Update All" asks twice first, since a
+  pack's mods are chosen to work together, and mods you added yourself are marked
+  "Added by you". An existing instance can be marked as a modpack in its Settings.
 
 ### CurseForge
 

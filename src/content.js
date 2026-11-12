@@ -388,6 +388,8 @@ async function installNow(ctx, req, emit) {
         source: req.source, projectId, versionId: v.id, versionName: v.versionNumber || v.name,
         title: meta.title, icon: meta.icon || null, type: req.type,
         ...(st ? { size: st.size, mtime: st.mtimeMs } : {}),
+        // In an instance made from a modpack: was this put in afterwards? An update keeps the answer.
+        ...((prior ? prior[1].added : inst.fromPack) ? { added: true } : {}),
       };
       store.saveManifest();
     }
@@ -454,6 +456,7 @@ function adoptFile({ store, trash }, inst, req, tmp, v) {
       source: req.source, projectId, versionId: v.id, versionName: v.versionNumber || v.name,
       title: req.title || v.name, icon: req.icon || null, type: req.type,
       ...(st ? { size: st.size, mtime: st.mtimeMs } : {}),
+      ...((prior ? prior[1].added : req.added) ? { added: true } : {}),
     };
     store.saveManifest();
     return filename;
@@ -523,6 +526,47 @@ async function list(ctx, type) {
   };
 }
 
+// Which enabled files of the active instance have a newer file on the site they came from.
+// -> { updates: { file: { source, projectId, versionId, versionName } }, unchecked: [site names that could not be asked] }
+async function updates(ctx, type) {
+  const { store, sources } = ctx;
+  const inst = activeInstance(store);
+  const { dir, files } = await scan(ctx, inst, type);
+  const entries = store.instance(inst.id) ? store.entries(inst.id) : {};
+  const opts = { type, gameVersion: inst.gameVersion || '', loader: inst.loader || '' };
+  const out = { updates: {}, unchecked: [] };
+  if (!opts.gameVersion) return out; // without a game version there is no telling what fits
+  const known = files.map((f) => ({ f, e: entries[f.key] })).filter(({ f, e }) => f.enabled && e && !e.unknown && e.projectId && e.versionId);
+  const offer = (f, e, versionId, versionName) => { out.updates[f.file] = { source: e.source, projectId: String(e.projectId), versionId: String(versionId), versionName: String(versionName || '') }; };
+
+  const fromModrinth = known.filter(({ e }) => e.source === 'modrinth');
+  if (fromModrinth.length) {
+    try {
+      const byHash = new Map();
+      for (const x of fromModrinth) byHash.set(await sha1File(path.join(dir, x.f.file), x.f.size, x.f.mtime), x);
+      const found = await sources.modrinth.updates([...byHash.keys()], opts);
+      for (const [hash, v] of Object.entries(found)) {
+        const x = byHash.get(hash);
+        if (x && v.id !== x.e.versionId) offer(x.f, x.e, v.id, v.versionNumber || v.name);
+      }
+    } catch { out.unchecked.push('Modrinth'); }
+  }
+  const fromCurseforge = known.filter(({ e }) => e.source === 'curseforge');
+  if (fromCurseforge.length) {
+    if (!sources.curseforge.hasKey()) out.unchecked.push('CurseForge');
+    else {
+      try {
+        const found = await sources.curseforge.updates(fromCurseforge.map(({ e }) => ({ projectId: e.projectId, versionId: e.versionId })), opts);
+        for (const { f, e } of fromCurseforge) {
+          const v = found[String(e.projectId)];
+          if (v) offer(f, e, v.id, v.name);
+        }
+      } catch { out.unchecked.push('CurseForge'); }
+    }
+  }
+  return out;
+}
+
 function resolveFile(store, type, file) {
   const inst = activeInstance(store);
   const folder = folderFor(type);
@@ -574,4 +618,4 @@ function installedIds(store) {
   return out;
 }
 
-module.exports = { download, install, adoptFile, nameAdopted, activeInstance, saveTo, list, toggle, remove, installedIds, discardPartials, FOLDER };
+module.exports = { download, install, adoptFile, nameAdopted, activeInstance, saveTo, list, updates, toggle, remove, installedIds, discardPartials, FOLDER };

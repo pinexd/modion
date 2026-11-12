@@ -26,6 +26,7 @@ class Store {
           loader: typeof i.loader === 'string' ? i.loader : '',
           // Set on instances Modion created or imported: `home` is the folder it may rename and delete.
           ...(i.managed === true && typeof i.home === 'string' && i.home ? { managed: true, home: i.home } : {}),
+          ...(i.fromPack === true ? { fromPack: true } : {}), // made from a modpack
           // How Modion starts this instance's game, where the person changed it from the defaults.
           // Files a modpack wanted that can only be downloaded from the CurseForge website.
           ...(Array.isArray(i.leftOut) && i.leftOut.length ? { leftOut: i.leftOut

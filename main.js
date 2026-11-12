@@ -343,7 +343,9 @@ async function importPack(file, fallbackName) {
     const copied = await modpack.unpackOverrides(pack, made.path);
     const inst = adopt(made, spec);
     // Remembered with the instance, so they can be fetched from the website now or later.
-    if (blocked.length) { inst.leftOut = blocked; store.saveConfig(); }
+    inst.fromPack = true; // what is installed into it later counts as added by the person
+    if (blocked.length) inst.leftOut = blocked;
+    store.saveConfig();
     return { config: publicConfig(), id: inst.id, name: inst.name, files: items.length, copied, skipped, leftOut: blocked.length };
   } catch (e) {
     if (made) fs.rmSync(made.home, { recursive: true, force: true }); // only the folder created just above
@@ -539,7 +541,9 @@ const methods = {
         destDir: path.join(inst.path, content.FOLDER[type]),
         onProgress: (received, total) => emit({ ...job, state: 'progress', received, total }),
       });
-      await content.adoptFile(ctx(), inst, { source: 'curseforge', projectId, type, title: shown.title, icon: shown.icon }, got.tmp, v);
+      // One of the pack's own left-out files is part of the pack; anything else was added by the person.
+      const ofPack = Boolean(inst.leftOut && inst.leftOut.some((f) => f.fileId === String(v.id)));
+      await content.adoptFile(ctx(), inst, { source: 'curseforge', projectId, type, title: shown.title, icon: shown.icon, added: Boolean(inst.fromPack) && !ofPack }, got.tmp, v);
       emit({ ...job, state: 'done', icon: shown.icon });
     } catch (e) {
       emit({ ...job, state: 'error', error: e.message });
@@ -919,6 +923,7 @@ const methods = {
     const env = lines(a.env, 8000);
     const bad = env.split('\n').find((l) => l.trim() && !/^\s*[A-Za-z_][A-Za-z0-9_]*=/.test(l));
     if (bad) throw new ApiError(`Environment variables are written NAME=value, one per line. This line is not: ${bad.slice(0, 60)}`, 'BAD_REQUEST');
+    if (typeof a.fromPack === 'boolean') { if (a.fromPack) inst.fromPack = true; else delete inst.fromPack; }
     const next = { memory, jvmArgs: lines(a.jvmArgs, 8000).replace(/\n/g, ' ').trim(), env: env.trim(), java };
     if (next.memory === null && !next.jvmArgs && !next.env && !next.java) delete inst.settings;
     else inst.settings = next;
@@ -1001,6 +1006,7 @@ const methods = {
   },
 
   'library.list': (a) => content.list(ctx(), contentType(a.type)),
+  'library.updates': (a) => content.updates(ctx(), contentType(a.type)),
   'library.toggle': (a) => content.toggle(ctx(), contentType(a.type), a.file),
   'library.remove': (a) => content.remove(ctx(), contentType(a.type), a.file),
   'library.openFolder': async (a) => {

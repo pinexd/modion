@@ -137,6 +137,39 @@ async function latest(projectId, opts = {}) {
   return list.find((v) => !opts.loader || v.loaders.includes(opts.loader)) || list[0] || null;
 }
 
+// For files already installed (given by sha1): the newer file of the same project that fits
+// `opts`, where there is one. -> { hash: version }. A file is only offered something from a
+// channel at least as stable as its own (someone on a release is not moved to a beta).
+const RANK = { release: 0, beta: 1, alpha: 2 };
+async function updates(hashes, opts = {}) {
+  const loaders = loaderFilter(opts.type, opts.loader) || (opts.type === 'resourcepack' ? ['minecraft'] : opts.type === 'shader' ? ['iris', 'optifine', 'canvas', 'vanilla'] : undefined);
+  if (!loaders || !opts.gameVersion) return {};
+  const out = {};
+  for (let i = 0; i < hashes.length; i += 500) {
+    const part = hashes.slice(i, i + 500);
+    const body = { hashes: part, algorithm: 'sha1' };
+    const [newest, current] = await Promise.all([
+      getJson(`${BASE}/version_files/update`, { method: 'POST', body: { ...body, loaders, game_versions: [opts.gameVersion] } }),
+      getJson(`${BASE}/version_files`, { method: 'POST', body }),
+    ]);
+    for (const hash of part) {
+      const now = current && current[hash], top = newest && newest[hash];
+      if (!now || !top || !top.id || top.id === now.id || top.project_id !== now.project_id) continue;
+      const mine = normVersion(now);
+      const newer = (v) => v.file && v.id !== mine.id && Date.parse(v.date) > Date.parse(mine.date) && RANK[v.channel] <= RANK[mine.channel];
+      let pick = normVersion(top);
+      if (!newer(pick)) {
+        // The newest file is less stable than the installed one; an older but newer-than-ours stable one may exist.
+        if (!(Date.parse(pick.date) > Date.parse(mine.date))) continue;
+        pick = (await versions(now.project_id, opts).catch(() => [])).find(newer);
+        if (!pick) continue;
+      }
+      out[hash] = pick;
+    }
+  }
+  return out;
+}
+
 async function brief(projectId) {
   const p = await getJson(`${BASE}/project/${encodeURIComponent(projectId)}`);
   return { title: p.title || p.slug || String(projectId), icon: p.icon_url || null };
@@ -198,4 +231,4 @@ async function identify(hashes) {
   return out;
 }
 
-module.exports = { search, project, versions, getVersion, latest, brief, gameVersions, categories, identify };
+module.exports = { search, project, versions, getVersion, latest, updates, brief, gameVersions, categories, identify };

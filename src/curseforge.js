@@ -164,6 +164,30 @@ async function latest(projectId, opts) {
   return list.find((v) => v.file) || list[0] || null;
 }
 
+// For projects already installed: the newest released file of each that fits `opts`.
+// installed: [{ projectId, versionId }] -> { projectId: { id, name } } where that file is
+// newer than the installed one (CurseForge's file IDs only ever go up).
+async function updates(installed, opts = {}) {
+  if (!opts.gameVersion || (opts.type === 'mod' && !opts.loader)) return {};
+  const wantLoader = opts.type === 'mod' ? [LOADER[opts.loader], ...(opts.loader === 'quilt' ? [LOADER.fabric] : [])] : null;
+  const out = {};
+  for (let i = 0; i < installed.length; i += 200) {
+    const part = installed.slice(i, i + 200);
+    const mods = arr((await cf('/mods', null, { modIds: part.map((x) => Number(x.projectId)).filter(Number.isInteger) })).data);
+    for (const m of mods) {
+      const mine = part.find((x) => String(x.projectId) === String(m.id));
+      if (!mine) continue;
+      const fits = arr(m.latestFilesIndexes).filter((f) => f && f.gameVersion === opts.gameVersion && (!wantLoader || wantLoader.includes(f.modLoader)));
+      // Betas and alphas are only offered to someone who is on one already.
+      const own = fits.find((f) => String(f.fileId) === String(mine.versionId));
+      const level = own ? own.releaseType : 1;
+      const best = fits.filter((f) => f.releaseType <= level).sort((a, b) => b.fileId - a.fileId)[0];
+      if (best && Number(best.fileId) > Number(mine.versionId)) out[String(m.id)] = { id: String(best.fileId), name: String(best.filename || best.fileId) };
+    }
+  }
+  return out;
+}
+
 async function brief(projectId) {
   const m = await cfObject(`/mods/${encodeURIComponent(projectId)}`);
   return { title: m.name || String(projectId), icon: (m.logo && m.logo.thumbnailUrl) || null, url: (m.links && m.links.websiteUrl) || null };
@@ -233,4 +257,4 @@ async function testKey() {
   return true;
 }
 
-module.exports = { identify, setKey, getKey, hasKey, search, project, versions, getVersion, getFiles, latest, brief, categories, fingerprints, testKey };
+module.exports = { identify, setKey, getKey, hasKey, search, project, versions, getVersion, getFiles, latest, updates, brief, categories, fingerprints, testKey };
