@@ -4,7 +4,7 @@ A Minecraft mod manager for Linux, with an experimental Windows port. Browse, re
 shaders and data packs from **Modrinth** and **CurseForge** into the instances of the
 launchers you already use.
 
-> **This project is AI-coded ("vibe-coded").** The code was written by an AI model (Claude)
+> **This project is AI-coded ("vibe-coded").** The code was written by an AI model (Claude Fable 5.2 and Opus 5.5)
 > under a person's direction, not by hand. It has automated tests, but it has not had a
 > line-by-line human review. Read it before you rely on it.
 
