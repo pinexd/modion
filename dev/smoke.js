@@ -950,6 +950,10 @@ require('../main.js').ready.then(async (win) => {
     // One file, by its arrow.
     await putOld();
     await openLibrary();
+    // Ticking "Enabled" far down a long list must not scroll the window itself: the hidden input sits in its own label.
+    expect(await js(`[...document.querySelectorAll('#view .check input')].every(i => i.offsetParent === i.parentElement)`), 'a checkbox input is positioned against the page, not its label');
+    await js(`document.querySelector('#view .list .check input').focus()`);
+    expect(await js(`document.scrollingElement.scrollTop === 0 && document.body.scrollTop === 0`), 'focusing a checkbox scrolled the window');
     await waitFor(`${arrows}.length === 1 && /^Update All \\(1\\)$/.test([...document.querySelectorAll('#view .bar .btn')].find(b => /^Update All/.test(b.textContent)).textContent)`, 'one update offered');
     expect(await js(`${arrows}[0].closest('.row').textContent.includes('Mod Menu') && ${arrows}[0].title.startsWith('Update to ')`), 'the arrow is not on Mod Menu');
     await js(`document.querySelector('#toasts').replaceChildren()`);

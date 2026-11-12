@@ -118,8 +118,10 @@ input.field::placeholder { color: #7d7d7d; }
 }
 select option { background: var(--field); color: #fff; }
 
-.check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
-.check input { position: absolute; opacity: 0; pointer-events: none; }
+/* The hidden input is placed against its label. Without that it sits where the row would be
+   in an unscrolled list, and focusing it scrolls the whole window out of place. */
+.check { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.check input { position: absolute; left: 0; top: 0; opacity: 0; pointer-events: none; }
 .check .box { position: relative; flex: none; width: 18px; height: 18px; background: var(--field); border: 1px solid #8a8a8a; }
 .check:hover .box { border-color: #fff; }
 .check input:checked + .box { background: var(--green); border-color: var(--green-hi); }
