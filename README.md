@@ -82,6 +82,8 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
 - **Stopping the game** – while a game Modion started is open, the Play button reads
   "Playing" and a red button beside it ends the game at once. It warns first that unsaved
   progress is lost; the warning can be switched off there and brought back in Settings.
+- **Themes** – Settings, "Appearance": Classic (flat) or Fancy (depth, shadows and gentle
+  motion). Classic is the default.
 - **Instance libraries** – with either "start directly" setting, new instances are made in
   Modion's own folder (`~/.local/share/Modion` unless Settings names another) instead of in
   Prism. Settings lists these folders: add one, choose which receives new instances,

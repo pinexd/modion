@@ -162,6 +162,7 @@ function publicConfig() {
     prismInstalled: launcher.prismInstalled(), // the Prism setting is only offered when it is
     openLogOnLaunch: store.config.openLogOnLaunch,
     skipStopWarning: store.config.skipStopWarning,
+    theme: store.config.theme,
     checkUpdates: store.config.checkUpdates && !HEADLESS, // the tests do not go looking for releases
     // Whether this copy can replace its own files; otherwise an update is a download from the release page.
     canSelfUpdate: updater.canInstall(__dirname),
@@ -416,6 +417,12 @@ const methods = {
     }
     setTimeout(() => { app.relaunch(); app.exit(0); }, 600); // after the answer has reached the page
     return { version: pendingUpdate.version };
+  },
+
+  'settings.setTheme': (a) => {
+    store.config.theme = a.theme === 'fancy' ? 'fancy' : 'classic';
+    store.saveConfig();
+    return publicConfig();
   },
 
   'settings.setSkipStopWarning': (a) => {

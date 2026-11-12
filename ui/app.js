@@ -147,8 +147,18 @@ function setConfig(cfg, { follow } = {}) {
     instances: Array.isArray(cfg.instances) ? cfg.instances : [],
     installed: cfg.installed && typeof cfg.installed === 'object' ? cfg.installed : {},
   };
+  applyTheme(S.cfg.theme);
   if (follow || before !== S.cfg.activeInstanceId) followInstance();
 }
+
+// "Fancy" is a second stylesheet over the classic look. The choice is also kept in the
+// page's own storage, so the next start shows it before the settings have been read.
+function applyTheme(theme) {
+  if (theme !== 'fancy' && theme !== 'classic') return;
+  document.getElementById('fancy').disabled = theme !== 'fancy';
+  try { localStorage.setItem('theme', theme); } catch {}
+}
+try { applyTheme(localStorage.getItem('theme')); } catch {}
 
 // The list of Minecraft versions comes from Modrinth. One request is shared by everyone
 // who asks, and a failed one is retried the next time a version menu is built.
@@ -1279,6 +1289,11 @@ function viewSettings(v) {
         h('summary', { class: 'label' }, 'Use a different application ID'),
         h('p', { class: 'label' }, 'For developers: the client ID of your own Microsoft app registration, approved for the Minecraft API, with the redirect URI http://localhost under "Mobile and desktop applications". Leave empty to use Modion\'s own. Changing it signs you out.'),
         h('div', { class: 'bar' }, clientId, saveId))),
+    h('div', { class: 'panel' },
+      h('h2', {}, 'Appearance'),
+      h('div', { class: 'bar' }, h('span', {}, 'Theme'),
+        select([['classic', 'Classic'], ['fancy', 'Fancy']], S.cfg.theme === 'fancy' ? 'fancy' : 'classic', (theme) => act(api('settings.setTheme', { theme }), 'Setting not saved'))),
+      h('p', { class: 'label' }, 'Classic is flat and still. Fancy adds depth, shadows and gentle motion (none of it if your system asks for reduced motion).')),
     h('div', { class: 'panel' },
       h('h2', {}, 'Updates'),
       h('p', {}, `You have Modion ${S.cfg.version}.`, S.cfg.canSelfUpdate ? '' : ' This copy cannot update itself, so a new version is offered as a download.'),

@@ -817,6 +817,24 @@ require('../main.js').ready.then(async (win) => {
     expect(!fs.existsSync(path.join(work, 'profile', 'icons', `${id}.png`)), 'the icon file was left behind');
   });
 
+  await step('theme: Classic by default, Fancy from the Settings dropdown', async () => {
+    const fancy = () => js(`!document.getElementById('fancy').disabled`);
+    const shadow = () => js(`getComputedStyle(document.querySelector('#rail')).boxShadow`);
+    expect(await js(`S.cfg.theme`) === 'classic' && !(await fancy()) && await shadow() === 'none', 'the classic look is not the default');
+    await js(`go('settings')`);
+    const pick = (v) => js(`(() => { const s = [...document.querySelectorAll('.settings select')].find(x => [...x.options].some(o => o.value === 'fancy')); s.value = '${v}'; s.dispatchEvent(new Event('change')); })()`);
+    await pick('fancy');
+    await waitFor(`S.cfg.theme === 'fancy' && !document.getElementById('fancy').disabled && getComputedStyle(document.querySelector('#rail')).boxShadow !== 'none'`, 'fancy theme applied');
+    await shot('28-fancy');
+    expect((await js(`window.modion.call('settings.setTheme', { theme: 'nonsense' }).then((r) => r.data.theme)`)) === 'classic', 'an unknown theme was accepted');
+    await pick('fancy');
+    await waitFor(`S.cfg.theme === 'fancy'`, 'fancy again');
+    await pick('classic');
+    await waitFor(`S.cfg.theme === 'classic' && document.getElementById('fancy').disabled`, 'back to classic');
+    expect(await shadow() === 'none', 'classic still shows fancy styles');
+    await js(`go('browse')`);
+  });
+
   await step('instance settings: Java, memory slider, arguments and environment', async () => {
     await js(`go('instances')`);
     const id = await js(`S.cfg.instances[0].id`);

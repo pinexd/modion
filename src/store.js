@@ -44,6 +44,7 @@ class Store {
       // How Play starts the game. Modion starting it itself, with the Microsoft account, is the default.
       launchMode: ['prism', 'account', 'offline'].includes(config.launchMode) ? config.launchMode : 'account',
       openLogOnLaunch: config.openLogOnLaunch !== false, // on unless switched off
+      theme: config.theme === 'fancy' ? 'fancy' : 'classic', // how Modion looks
       skipStopWarning: config.skipStopWarning === true, // stop a running game without asking first
       checkUpdates: config.checkUpdates !== false,       // likewise
       offlineName: typeof config.offlineName === 'string' ? config.offlineName : '',
