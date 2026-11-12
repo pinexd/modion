@@ -40,7 +40,8 @@ instances in `%APPDATA%\Modion\instances`, and downloaded game files in
 ### Updates
 
 Modion looks at this project's GitHub releases when it starts (this can be switched off in
-Settings, which also has a "Check Now" button) and asks before doing anything. An installed
+Settings, which also has a "Check Now" button) and asks before doing anything. "Skip This Version" stops it asking about that version at
+start; a newer one is offered again, and "Check Now" always shows what there is. An installed
 or portable copy can then update itself: it downloads the new version of Modion's own
 files, checks them against the project's release signature (the public key is built in; an
 update that is unsigned or signed by anyone else is refused), swaps them in and restarts.

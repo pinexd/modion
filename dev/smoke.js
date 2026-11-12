@@ -868,15 +868,16 @@ require('../main.js').ready.then(async (win) => {
     const real = { check: updater.check, canInstall: updater.canInstall };
     let installs = 0;
     updater.install = async () => { installs++; };
-    updater.check = async () => ({ version: '9.9.9', name: 'Modion 9.9.9', notes: 'Something new.\n<b>not markup</b>', page: 'https://github.com/pinexd/modion/releases', payload: { url: 'x', sig: 'y', size: 1 } });
+    updater.check = async () => ({ version: '9.9.9', name: 'Modion 9.9.9', notes: '# Big news\n- one **bold** thing\n\n<script>window.pwned = 1</script><img src="https://example.com/x.png" onerror="window.pwned = 1"><a href="javascript:window.pwned=1">x</a>', page: 'https://github.com/pinexd/modion/releases', payload: { url: 'x', sig: 'y', size: 1 } });
     try {
       await js(`go('settings')`);
       await waitFor(`[...document.querySelectorAll('.panel h2')].some((x) => x.textContent === 'Updates')`, 'updates panel');
       await js(`[...document.querySelectorAll('.settings .btn')].find(b => b.textContent === 'Check Now').click()`);
       await waitFor(`!document.querySelector('#overlay').hidden && /Modion 9\.9\.9 is available/.test(document.querySelector('#overlay').textContent)`, 'update screen');
       // This copy runs from the source folder, so it must offer the download page, not an install.
-      expect(await js(`[...document.querySelectorAll('#overlay .btn')].map(b => b.textContent).join('|')`) === 'Later|Open Download Page', 'a source checkout was offered a self-update: ' + await js(`[...document.querySelectorAll('#overlay .btn')].map(b => b.textContent).join('|')`));
-      expect(await js(`!document.querySelector('#overlay b') && document.querySelector('#overlay .notes').textContent.includes('<b>not markup</b>')`), 'release notes were treated as markup');
+      expect(await js(`[...document.querySelectorAll('#overlay .btn')].map(b => b.textContent).join('|')`) === 'Skip This Version|Later|Open Download Page', 'a source checkout was offered a self-update: ' + await js(`[...document.querySelectorAll('#overlay .btn')].map(b => b.textContent).join('|')`));
+      // The notes are rendered as Markdown, with anything that could run taken out.
+      expect(await js(`(() => { const n = document.querySelector('#overlay .notes'); return Boolean(n.querySelector('h1') && n.querySelector('li strong')) && !n.querySelector('script') && ![...n.querySelectorAll('*')].some(e => [...e.attributes].some(a => /^on/i.test(a.name) || /javascript:/i.test(a.value))) && window.pwned === undefined; })()`), 'release notes were not rendered safely: ' + await js(`document.querySelector('#overlay .notes').innerHTML`));
       expect((await js(`window.modion.call('update.install')`)).code === 'NOT_INSTALLABLE' && installs === 0, 'an install was possible from a source checkout');
       updater.canInstall = () => true;
       await js(`closeScreen()`);
@@ -885,6 +886,23 @@ require('../main.js').ready.then(async (win) => {
       await shot('19-update');
       expect(installs === 0, 'the update was installed without being asked');
       await js(`closeScreen()`);
+      // Skip This Version: nothing at start for that version, Check Now still shows it, a newer one is offered again.
+      await js(`checkForUpdate(true)`);
+      await waitFor(`[...document.querySelectorAll('#overlay .btn')].some(b => b.textContent === 'Skip This Version')`, 'skip button');
+      await js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === 'Skip This Version').click()`);
+      await waitFor(`document.querySelector('#overlay').hidden`, 'dialog closed by skipping');
+      await js(`checkForUpdate(false)`);
+      await sleep(400);
+      expect(await js(`document.querySelector('#overlay').hidden`), 'a skipped version was offered at start');
+      await js(`checkForUpdate(true)`);
+      await waitFor(`!document.querySelector('#overlay').hidden && /9\.9\.9/.test(document.querySelector('#overlay').textContent)`, 'Check Now still shows a skipped version');
+      await js(`closeScreen()`);
+      const was = updater.check;
+      updater.check = async () => ({ ...(await was()), version: '9.9.10', name: 'Modion 9.9.10' });
+      await js(`checkForUpdate(false)`);
+      await waitFor(`!document.querySelector('#overlay').hidden && /9\.9\.10/.test(document.querySelector('#overlay').textContent)`, 'a newer version is offered at start again');
+      await js(`closeScreen()`);
+      expect(installs === 0, 'skipping installed something');
       updater.check = async () => null;
       await js(`checkForUpdate(true)`);
       await waitFor(`[...document.querySelectorAll('#toasts .toast')].some(t => /newest version/.test(t.textContent))`, 'no-update message');

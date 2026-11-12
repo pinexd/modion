@@ -46,6 +46,7 @@ class Store {
       launchMode: ['prism', 'account', 'offline'].includes(config.launchMode) ? config.launchMode : 'account',
       openLogOnLaunch: config.openLogOnLaunch !== false, // on unless switched off
       theme: config.theme === 'fancy' ? 'fancy' : 'classic', // how Modion looks
+      skippedUpdate: typeof config.skippedUpdate === 'string' ? config.skippedUpdate.slice(0, 40) : '', // a version the person does not want to be told about at start
       skipStopWarning: config.skipStopWarning === true, // stop a running game without asking first
       checkUpdates: config.checkUpdates !== false,       // likewise
       offlineName: typeof config.offlineName === 'string' ? config.offlineName : '',

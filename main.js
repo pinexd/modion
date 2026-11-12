@@ -409,7 +409,16 @@ const methods = {
     const found = await updater.check(require('./package.json').version);
     pendingUpdate = found;
     if (!found) return null;
-    return { version: found.version, name: found.name, notes: found.notes, page: found.page, installable: Boolean(found.payload) && updater.canInstall(__dirname) };
+    // `skipped`: the person asked not to be told about this version when Modion starts.
+    return { version: found.version, name: found.name, notes: found.notes, page: found.page, installable: Boolean(found.payload) && updater.canInstall(__dirname), skipped: store.config.skippedUpdate === found.version };
+  },
+
+  // Do not offer the version found by the last check at start again. A newer one is offered as usual.
+  'update.skip': () => {
+    if (!pendingUpdate) throw new ApiError('Check for updates first.', 'BAD_REQUEST');
+    store.config.skippedUpdate = String(pendingUpdate.version).slice(0, 40);
+    store.saveConfig();
+    return true;
   },
 
   // Installs the update found by the last check, then restarts Modion.

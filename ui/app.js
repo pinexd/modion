@@ -1826,6 +1826,7 @@ async function checkForUpdate(manual) {
   let found;
   try { found = await api('update.check'); } catch (e) { if (manual) fail(e, 'Could not check for updates'); return; }
   if (!found) { if (manual) toast('No update', `Modion ${S.cfg.version} is the newest version.`); return; }
+  if (!manual && found.skipped) return; // "Skip This Version": only Check Now in Settings brings it up again
   // Never push another screen (the first-run instance picker, say) out of the way unasked.
   if (!manual && !$('#overlay').hidden) { toast('Update available', `${found.name} is out. Open Settings to update.`, { time: 12000 }); return; }
   const install = btn('Update and Restart', async () => {
@@ -1841,13 +1842,25 @@ async function checkForUpdate(manual) {
     }
   }, 'green');
   const page = btn(found.installable ? 'Release Page' : 'Open Download Page', () => api('openExternal', { url: found.page }).catch(fail), found.installable ? '' : 'green');
+  const skip = btn('Skip This Version', async () => {
+    try { await api('update.skip'); } catch (e) { fail(e); return; }
+    closeScreen();
+    toast('Version skipped', `Modion will not ask about ${found.version} when it starts. "Check Now" in Settings still finds it.`, { time: 8000 });
+  }, 'yellow keep-left');
+  // Release notes are written in Markdown; they go through the same renderer and sanitiser
+  // as project descriptions, so nothing in them can run or restyle the app.
+  let notes = null;
+  if (found.notes) {
+    notes = h('div', { class: 'notes prose' });
+    try { add(notes, Markdown.render({ format: 'markdown', text: String(found.notes) })); } catch { notes = h('pre', { class: 'notes' }, found.notes); }
+  }
   showScreen('Update available',
     h('div', { class: 'screen-body' }, h('div', { class: 'confirm' },
       h('p', {}, `${found.name} is available. You have Modion ${S.cfg.version}.`),
       !found.installable && h('p', { class: 'dim' }, 'This copy of Modion cannot replace its own files (it runs from a source folder, or this release has no signed update package), so the new version has to be downloaded from the release page.'),
       found.installable && h('p', { class: 'dim' }, 'The update is downloaded, checked against the project\'s release signature, and Modion restarts. Your settings, instances and game files are not touched.'),
-      found.notes && h('pre', { class: 'notes' }, found.notes))),
-    found.installable ? [btn('Later', closeScreen), page, install] : [btn('Later', closeScreen), page]);
+      notes)),
+    found.installable ? [skip, btn('Later', closeScreen), page, install] : [skip, btn('Later', closeScreen), page]);
 }
 
 /* ---------- start ---------- */
