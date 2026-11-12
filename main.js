@@ -834,8 +834,21 @@ const methods = {
     try { res = await fetch(u, { headers: { 'User-Agent': require('./src/http').UA }, signal: AbortSignal.timeout(20000) }); } catch { throw new ApiError(`Could not reach ${u.hostname}.`, 'NETWORK'); }
     const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     if (!res.ok || !Object.values(IMAGE_TYPES).includes(type)) throw new ApiError('That link did not give a picture.', 'BAD_IMAGE');
-    const bytes = Buffer.from(await res.arrayBuffer());
-    if (bytes.length > 8 * 2 ** 20) throw new ApiError('That picture is too large.', 'BAD_IMAGE');
+    // Stop reading as soon as it is too large, whatever the server said about its size.
+    const limit = 8 * 2 ** 20, parts = [];
+    let size = 0;
+    if (Number(res.headers.get('content-length')) > limit || !res.body) throw new ApiError('That picture is too large.', 'BAD_IMAGE');
+    try {
+      for await (const part of res.body) {
+        size += part.length;
+        if (size > limit) throw new ApiError('That picture is too large.', 'BAD_IMAGE');
+        parts.push(part);
+      }
+    } catch (e) {
+      if (e instanceof ApiError) throw e;
+      throw new ApiError(`Lost the connection to ${u.hostname}.`, 'NETWORK');
+    }
+    const bytes = Buffer.concat(parts);
     return { data: `data:${type};base64,${bytes.toString('base64')}` };
   },
 
