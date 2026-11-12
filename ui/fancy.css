@@ -65,11 +65,11 @@
   box-shadow: inset 0 1px rgba(255, 255, 255, .1), inset 0 -1px rgba(0, 0, 0, .4), 0 14px 32px rgba(0, 0, 0, .55), 0 2px 6px rgba(0, 0, 0, .4);
   animation: toast-in .32s var(--ease) both;
 }
-.toast::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: linear-gradient(180deg, #5bea70, var(--green)); box-shadow: 0 0 12px rgba(39, 206, 64, .55); }
-.toast::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, rgba(39, 206, 64, .09), transparent 45%); pointer-events: none; }
+.toast::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: linear-gradient(180deg, #2fbf47, var(--green)); width: 3px; }
+.toast::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, rgba(39, 206, 64, .03), transparent 30%); pointer-events: none; }
 .toast > * { position: relative; z-index: 1; } /* the tint lies under the picture and text */
-.toast.t-red::before { background: linear-gradient(180deg, #ff8a8a, #c62f2f); box-shadow: 0 0 12px rgba(230, 70, 70, .6); }
-.toast.t-red::after { background: linear-gradient(100deg, rgba(230, 70, 70, .12), transparent 45%); }
+.toast.t-red::before { background: linear-gradient(180deg, #e25555, #c62f2f); }
+.toast.t-red::after { background: linear-gradient(100deg, rgba(230, 70, 70, .04), transparent 30%); }
 .toast .slot { box-shadow: 0 4px 10px rgba(0, 0, 0, .55), inset 0 0 0 1px rgba(0, 0, 0, .5); }
 .toast .msg > :first-child { font-weight: 700; text-shadow: 0 1px 0 rgba(0, 0, 0, .5); }
 .toast.out { animation: toast-out .2s ease-in both; }
