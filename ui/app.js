@@ -322,10 +322,20 @@ window.modion.onInstalled((ids) => {
 });
 
 // A game Modion started opened or closed.
+// Watching the game start: the Library's log tab, if Settings asks for it.
+function showLaunchLog() {
+  if (S.cfg.openLogOnLaunch === false || (S.view === 'library' && S.library.type === 'log')) return;
+  S.library.type = 'log';
+  go('library');
+}
+
 window.modion.onRunning((ids) => {
   if (!Array.isArray(ids)) return;
+  const started = ids.filter((id) => !(S.cfg.running || []).includes(id));
   S.cfg.running = ids;
   renderBottom();
+  // The process of the selected instance has just appeared: its log is being written from now on.
+  if (started.includes(S.cfg.activeInstanceId)) showLaunchLog();
 });
 
 window.modion.onDownload((d) => {
@@ -531,7 +541,7 @@ function renderBottom() {
       try {
         const r = await api('instances.launch', { id: inst.id });
         toast(r.play ? `Starting ${inst.name}` : `Opening ${r.label}`, r.play ? `${r.label} is launching the game.` : `Start "${inst.name}" from there.`, { icon: inst.icon });
-        if (S.cfg.openLogOnLaunch !== false) { S.library.type = 'log'; go('library'); } // watch the game start
+        showLaunchLog(); // a game Modion starts itself has already switched, when its process appeared
       } catch (e) { fail(e, 'Could not start the game'); }
       setTimeout(() => { play.disabled = false; }, 4000); // long enough that a double click cannot start it twice
       play.textContent = label;
@@ -1142,6 +1152,7 @@ function viewProject(v) {
 /* ---------- game log ---------- */
 
 let logTimer = null;
+const LOG_LEVELS = [['err', 'Errors'], ['warn', 'Warnings'], ['info', 'Info'], ['debug', 'Debug']];
 const LOG_LINES = 4000; // the view keeps this many lines; the full log stays in its file
 
 // Live view of the selected instance's game log: asks for what is new once a second and
@@ -1179,7 +1190,6 @@ function viewLog(v, inst) {
   paintLevels();
   add(v, h('div', { class: 'bar' }, h('span', {}, `Game log of ${inst.name}`), where, h('div', { class: 'push' }, follow)),
     h('div', { class: 'bar log-filter' }, find, boxes, count), box);
-const LOG_LEVELS = [['err', 'Errors'], ['warn', 'Warnings'], ['info', 'Info'], ['debug', 'Debug']];
   box.addEventListener('scroll', () => { follow.firstChild.checked = box.scrollHeight - box.scrollTop - box.clientHeight < 40; });
 
   let source = '', offset = 0, waiting = false, empty = true, tone = 'info';
@@ -1204,6 +1214,7 @@ const LOG_LEVELS = [['err', 'Errors'], ['warn', 'Warnings'], ['info', 'Info'], [
       tone = /\b(ERROR|FATAL|Exception|Caused by)\b|^\s+at /.test(line) ? 'err' : /\bWARN\b/.test(line) ? 'warn' : /\bINFO\b/.test(line) ? 'info' : /\b(DEBUG|TRACE)\b/.test(line) ? 'debug' : tone;
       add(out, h('div', { class: tone, hidden: !matches(line.toLowerCase(), words) }, line));
     }
+    recount();
     while (out.childElementCount > LOG_LINES) out.firstChild.remove();
     if (follow.firstChild.checked) box.scrollTop = box.scrollHeight;
   };
@@ -1214,7 +1225,6 @@ const LOG_LEVELS = [['err', 'Errors'], ['warn', 'Warnings'], ['info', 'Info'], [
 /* ---------- library ---------- */
 
 const updateCache = new Map(); // "instance:type" -> what library.updates found, until something is installed
-    recount();
 
 function viewLibrary(v) {
   const inst = activeInst();
@@ -1359,6 +1369,8 @@ function viewLibrary(v) {
             refresh();
           }, 'small')));
     }));
+    add(list, noMatch);
+    applySearch();
     paintUpdates();
     lookForUpdates();
   };
@@ -1369,8 +1381,6 @@ function viewLibrary(v) {
 
 
 function viewSettings(v) {
-    add(list, noMatch);
-    applySearch();
   const key = h('input', { class: 'field', type: 'password', placeholder: S.cfg.ownCurseforgeKey ? 'A key is saved. Paste a new one to replace it.' : 'Paste your CurseForge API key', spellcheck: false, autocomplete: 'off' });
   const status = h('p', { class: S.cfg.hasCurseforgeKey ? 'label' : '' }, !S.cfg.hasCurseforgeKey ? 'CurseForge is not connected yet.' : S.cfg.ownCurseforgeKey ? 'CurseForge is connected with your own key.' : 'CurseForge is connected with the key that came with Modion. You can use your own instead.');
   const save = btn('Save Key', async () => {

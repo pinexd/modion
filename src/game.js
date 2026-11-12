@@ -562,11 +562,13 @@ const onChange = (cb) => { changed = cb; };
 function track(gameDir, child) {
   live.set(gameDir, child);
   changed();
-  child.once('exit', () => {
+  const gone = () => {
     if (live.get(gameDir) !== child) return;
     live.delete(gameDir);
     changed();
-  });
+  };
+  child.once('exit', gone);
+  child.once('error', gone); // it could not be started at all
 }
 
 // Ends a game process and whatever it started (the game runs as the head of its own process group).
@@ -652,6 +654,10 @@ async function launch(inst, session, emit) {
     } finally {
       fs.closeSync(log);
     }
+    // Counted as running from the moment the process exists, so the window can show its log
+    // and offer to stop it while it is still being watched for an early death.
+    child.unref();
+    track(inst.path, child);
     const outcome = await new Promise((resolve) => {
       const timer = setTimeout(() => resolve({ up: true }), 6000);
       child.once('error', (e) => { clearTimeout(timer); resolve({ error: e.message }); });
@@ -662,8 +668,6 @@ async function launch(inst, session, emit) {
       try { tail = (await fsp.readFile(logFile, 'utf8')).trim().split('\n').slice(-4).join(' | ').slice(-400); } catch {}
       throw new ApiError(`Minecraft stopped right after starting (${outcome.error || `exit ${outcome.code ?? outcome.signal}`}). ${tail}`.trim(), 'CRASHED');
     }
-    child.unref();
-    track(inst.path, child);
     return { label: 'Modion', play: true, pid: child.pid, log: logFile };
   } finally {
     running.delete(inst.path);
