@@ -1220,7 +1220,7 @@ require('../main.js').ready.then(async (win) => {
       cf.fingerprints = async () => ({});
       cf.identify = async (prints) => Object.fromEntries(prints.slice(0, 1).map((p) => [p, { source: 'curseforge', projectId: '4242', versionId: '9', versionName: '1.0', title: 'Only On CurseForge', icon: null }]));
       fs.writeFileSync(path.join(inst.path, 'mods', 'cf-only.jar'), 'curseforge only ' + Date.now());
-      await js(`api('config.get').then(setConfig); updateCache.clear(); S.library.type = 'mod'; S.library.source = ''; S.library.origin = ''; go('browse'); go('library')`);
+      await js(`api('config.get').then((c) => { setConfig(c); updateCache.clear(); S.library.type = 'mod'; S.library.source = ''; S.library.origin = ''; go('browse'); go('library'); })`);
       // Mod Menu brings what it needs (Fabric API), which came with "the pack" as well.
       const titles = `[...document.querySelectorAll('#view .list .row')].map(r => r.querySelector('.row-title').textContent)`;
       await waitFor(`${titles}.includes('Only On CurseForge')`, 'the library');
@@ -1264,7 +1264,7 @@ require('../main.js').ready.then(async (win) => {
       await shot('35-updated-by-you');
       // A plain instance has no "who" filter.
       await callApi('instances.setSettings', { id: inst.id, fromPack: false, java: '', jvmArgs: '', env: '', memory: null });
-      await js(`api('config.get').then(setConfig); go('browse'); go('library')`);
+      await js(`api('config.get').then((c) => { setConfig(c); go('browse'); go('library'); })`);
       await waitFor(`document.querySelectorAll('#view .list .row').length === ${total}`, 'rows again');
       expect(await js(`document.querySelectorAll('#view .bar select').length`) === 1 && !(await js(`Boolean(document.querySelector('#view .updated-note, #view .added-note'))`)), 'a plain instance shows modpack filters or tags');
     } finally {
@@ -1323,7 +1323,7 @@ require('../main.js').ready.then(async (win) => {
       expect(check.update && check.update.versionName === '2.0.0' && check.current.versionName === '1.0.0', `update check: ${JSON.stringify(check)}`);
 
       // On the Instances page: the button, the question, the update.
-      await js(`api('config.get').then((c) => setConfig(c, { follow: true })); packUpdates.clear(); go('instances')`);
+      await js(`api('config.get').then((c) => { setConfig(c, { follow: true }); packUpdates.clear(); go('instances'); })`);
       await waitFor(`[...document.querySelectorAll('#view .row-actions .btn')].some(b => b.textContent === 'Update to 2.0.0' && !b.disabled)`, 'the update button');
       await shot('36-pack-update');
       await js(`[...document.querySelectorAll('#view .row-actions .btn')].find(b => b.textContent === 'Update to 2.0.0').click()`);
