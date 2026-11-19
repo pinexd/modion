@@ -1219,7 +1219,8 @@ require('../main.js').ready.then(async (win) => {
       // A file CurseForge alone knows, and one nobody knows.
       cf.hasKey = () => true;
       cf.fingerprints = async () => ({});
-      cf.identify = async (prints) => Object.fromEntries(prints.slice(0, 1).map((p) => [p, { source: 'curseforge', projectId: '4242', versionId: '9', versionName: '1.0', title: 'Only On CurseForge', icon: null }]));
+      let named = false; // only the first file asked about is CurseForge's
+      cf.identify = async (prints) => (named ? {} : (named = true, Object.fromEntries(prints.slice(0, 1).map((p) => [p, { source: 'curseforge', projectId: '4242', versionId: '9', versionName: '1.0', title: 'Only On CurseForge', icon: null }]))));
       fs.writeFileSync(path.join(inst.path, 'mods', 'cf-only.jar'), 'curseforge only ' + Date.now());
       await js(`api('config.get').then((c) => { setConfig(c); updateCache.clear(); S.library.type = 'mod'; S.library.source = ''; S.library.origin = ''; go('browse'); go('library'); })`);
       // Mod Menu brings what it needs (Fabric API), which came with "the pack" as well.
@@ -1294,7 +1295,7 @@ require('../main.js').ready.then(async (win) => {
       const bytes = fs.readFileSync(file), url = `https://cdn.modrinth.com/data/fakepack/${version}/pack-${version}.mrpack`;
       served.set(url, bytes);
       return { id: `pv-${version}`, projectId: 'FAKEPACK', name: `Fake Pack ${version}`, versionNumber: version, channel: 'release', gameVersions: ['1.21.1'], loaders: ['fabric'], dependencies: [],
-        date: version === '1.0.0' ? '2025-01-01T00:00:00Z' : '2025-06-01T00:00:00Z', file: { url, filename: `pack-${version}.mrpack`, size: bytes.length, sha1: sha('sha1', bytes), sha512: sha('sha512', bytes) } };
+        date: `2025-0${version[0]}-01T00:00:00Z`, file: { url, filename: `pack-${version}.mrpack`, size: bytes.length, sha1: sha('sha1', bytes), sha512: sha('sha512', bytes) } };
     };
     const a1 = jar('a-1.jar', 1), b = jar('b.jar', 1), c = jar('c.jar', 1), a2 = jar('a-2.jar', 2), d = jar('d.jar', 1);
     const v1 = build('1.0.0', [a1, b, c], { 'config/a.toml': 'a=1', 'config/b.toml': 'b=1' });
