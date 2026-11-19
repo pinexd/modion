@@ -1253,7 +1253,7 @@ require('../main.js').ready.then(async (win) => {
       // Both filters and the search together; the count says how many are shown.
       await pick(0, 'modrinth'); await pick(1, 'added');
       expect(await shown() === 'Sodium' && new RegExp(`^1 of ${total} files`).test(await js(`document.querySelector('#view .bar .dim').textContent`)), `filters together: ${await shown()}`);
-      await pick(1, 'pack');
+      await pick(0, 'curseforge');
       expect(await shown() === '' && await js(`!document.querySelector('#view .list .empty').hidden`), 'no note when nothing matches the filters');
       await pick(0, ''); await pick(1, '');
       expect((await shown()).split(',').length === total, 'clearing the filters did not bring everything back');
