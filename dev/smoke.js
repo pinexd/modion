@@ -9,7 +9,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const out = path.resolve(process.argv[2] || path.join(os.tmpdir(), 'modion-smoke'));
+// Electron hands its own --flags on to the script too: the folder is the last argument that is not one.
+const out = path.resolve(process.argv.slice(2).filter((a) => !a.startsWith('--')).pop() || path.join(os.tmpdir(), 'modion-smoke'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'modion-smoke-'));
 const instanceDir = path.join(work, 'instance');
 const mods = path.join(instanceDir, 'mods');
@@ -1181,6 +1182,381 @@ require('../main.js').ready.then(async (win) => {
     expect(content.installedIds(store)['curseforge:777'] === '9', 'the website download was not recorded as the installed version');
   });
 
+  // Answers chosen downloads from memory (and everything else from the network), for stand-in packs and mods.
+  const served = new Map();
+  const realFetch = global.fetch;
+  global.fetch = (url, opts) => {
+    const bytes = served.get(String(url));
+    return bytes ? Promise.resolve(new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.length) } })) : realFetch(url, opts);
+  };
+  const crypto = require('crypto');
+  const sha = (algo, b) => crypto.createHash(algo).update(b).digest('hex');
+  const callApi = (method, args = {}) => js(`window.modion.call('${method}', ${JSON.stringify(args)})`);
+  const pressIn = (label) => js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === ${JSON.stringify(label)}).click()`);
+  // A new instance of its own that is made the selected one; resolves to its record.
+  const freshInstance = async (name, extra = {}) => {
+    const made = await callApi('instances.create', { name, gameVersion: '1.21.1', loader: 'fabric', ...extra });
+    expect(made.ok, `could not create ${name}: ${JSON.stringify(made).slice(0, 200)}`);
+    const inst = made.data.instances.find((i) => i.name === name);
+    await callApi('instances.setActive', { id: inst.id });
+    await js(`api('config.get').then((c) => setConfig(c, { follow: true }))`);
+    return inst;
+  };
+
+  await step('library filters by site, and in a modpack by who put a file there; moved pack mods are "Updated by you"', async () => {
+    const cf = require('../src/curseforge');
+    const real = { hasKey: cf.hasKey, identify: cf.identify, fingerprints: cf.fingerprints };
+    const before = await js(`S.cfg.activeInstanceId`);
+    const inst = await freshInstance('Filters');
+    const versions = (await require('../src/modrinth').versions('modmenu', { type: 'mod', gameVersion: '1.21.1', loader: 'fabric' })).filter((v) => v.channel === 'release' && v.file);
+    const modmenu = { source: 'modrinth', projectId: 'mOgUt4GM', type: 'mod', gameVersion: '1.21.1', loader: 'fabric', title: 'Mod Menu' };
+    try {
+      // Mod Menu arrives with "the pack"; the person then moves it to a newer file, and adds Sodium.
+      expect((await callApi('install', { ...modmenu, versionId: versions[versions.length - 1].id })).ok, 'old Mod Menu not installed');
+      expect((await callApi('instances.setSettings', { id: inst.id, fromPack: true, java: '', jvmArgs: '', env: '', memory: null })).ok, 'not marked as a pack');
+      expect((await callApi('install', modmenu)).ok, 'Mod Menu not updated');
+      expect((await callApi('install', { source: 'modrinth', projectId: 'AANobbMI', type: 'mod', gameVersion: '1.21.1', loader: 'fabric', title: 'Sodium' })).ok, 'Sodium not installed');
+      // A file CurseForge alone knows, and one nobody knows.
+      cf.hasKey = () => true;
+      cf.fingerprints = async () => ({});
+      let named = false; // only the first file asked about is CurseForge's
+      cf.identify = async (prints) => (named ? {} : (named = true, Object.fromEntries(prints.slice(0, 1).map((p) => [p, { source: 'curseforge', projectId: '4242', versionId: '9', versionName: '1.0', title: 'Only On CurseForge', icon: null }]))));
+      fs.writeFileSync(path.join(inst.path, 'mods', 'cf-only.jar'), 'curseforge only ' + Date.now());
+      await js(`api('config.get').then((c) => { setConfig(c); updateCache.clear(); S.library.type = 'mod'; S.library.source = ''; S.library.origin = ''; go('browse'); go('library'); })`);
+      // Mod Menu brings what it needs (Fabric API), which came with "the pack" as well.
+      const titles = `[...document.querySelectorAll('#view .list .row')].map(r => r.querySelector('.row-title').textContent)`;
+      await waitFor(`${titles}.includes('Only On CurseForge')`, 'the library');
+      await sleep(500);
+      fs.writeFileSync(path.join(inst.path, 'mods', 'handmade.jar'), 'nobody knows ' + Date.now());
+      await js(`go('browse'); go('library')`);
+      await waitFor(`${titles}.includes('handmade.jar')`, 'the hand-made file');
+      const total = await js(`${titles}.length`);
+      const deps = (await js(`${titles}`)).filter((t) => !['Mod Menu', 'Sodium', 'Only On CurseForge', 'handmade.jar'].includes(t));
+      const shown = () => js(`[...document.querySelectorAll('#view .list .row')].filter(r => !r.hidden).map(r => r.querySelector('.row-title').textContent).sort().join()`);
+      const plus = (...names) => [...names, ...deps].sort().join();
+      const pick = (nth, value) => js(`(() => { const s = document.querySelectorAll('#view .bar select')[${nth}]; s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change')); })()`);
+      expect(await js(`document.querySelectorAll('#view .bar select').length`) === 2, 'a modpack instance should have both filters');
+      await shot('34-library-filters');
+      await pick(0, 'modrinth');
+      expect(await shown() === plus('Mod Menu', 'Sodium'), `Modrinth only: ${await shown()}`);
+      await pick(0, 'curseforge');
+      expect(await shown() === 'Only On CurseForge', `CurseForge only: ${await shown()}`);
+      await pick(0, 'unknown');
+      expect(await shown() === 'handmade.jar', `unidentified only: ${await shown()}`);
+      await pick(0, '');
+      await pick(1, 'added');
+      expect(await shown() === 'Sodium', `added by you: ${await shown()}`);
+      await pick(1, 'updated');
+      expect(await shown() === 'Mod Menu', `updated by you: ${await shown()}`);
+      await pick(1, 'pack');
+      expect(await shown() === plus('Only On CurseForge', 'handmade.jar'), `from the pack: ${await shown()}`);
+      // Both filters and the search together; the count says how many are shown.
+      await pick(0, 'modrinth'); await pick(1, 'added');
+      expect(await shown() === 'Sodium' && new RegExp(`^1 of ${total} files`).test(await js(`document.querySelector('#view .bar .dim').textContent`)), `filters together: ${await shown()}`);
+      await pick(0, 'curseforge');
+      expect(await shown() === '' && await js(`!document.querySelector('#view .list .empty').hidden`), 'no note when nothing matches the filters');
+      await pick(0, ''); await pick(1, '');
+      expect((await shown()).split(',').length === total, 'clearing the filters did not bring everything back');
+      // The tags.
+      const tags = await js(`Object.fromEntries([...document.querySelectorAll('#view .list .row')].map(r => [r.querySelector('.row-title').textContent, [...r.querySelectorAll('.added-note, .updated-note')].map(t => t.className + ':' + t.textContent).join()]))`);
+      expect(tags['Mod Menu'] === 'updated-note:Updated by you' && tags['Sodium'] === 'added-note:Added by you' && !tags['Only On CurseForge'], `tags: ${JSON.stringify(tags)}`);
+      const colour = await js(`getComputedStyle(document.querySelector('#view .updated-note')).color`);
+      const [r, g, b] = colour.match(/\d+/g).map(Number);
+      expect(g > 200 && b > 190 && r < 160, `the tag is not turquoise: ${colour}`);
+      await shot('35-updated-by-you');
+      // A plain instance has no "who" filter.
+      await callApi('instances.setSettings', { id: inst.id, fromPack: false, java: '', jvmArgs: '', env: '', memory: null });
+      await js(`api('config.get').then((c) => { setConfig(c); go('browse'); go('library'); })`);
+      await waitFor(`document.querySelectorAll('#view .list .row').length === ${total}`, 'rows again');
+      expect(await js(`document.querySelectorAll('#view .bar select').length`) === 1 && !(await js(`Boolean(document.querySelector('#view .updated-note, #view .added-note'))`)), 'a plain instance shows modpack filters or tags');
+    } finally {
+      Object.assign(cf, real);
+      await callApi('instances.delete', { id: inst.id });
+      await callApi('instances.setActive', { id: before });
+      await js(`api('config.get').then((c) => { setConfig(c, { follow: true }); go('browse'); })`);
+    }
+  });
+
+  await step('a modpack downloaded through Modion can be updated, and the update keeps what you did', async () => {
+    const { writeZip } = require('../src/zip');
+    const modrinth = require('../src/modrinth');
+    const real = { getVersion: modrinth.getVersion, versions: modrinth.versions };
+    const before = await js(`S.cfg.activeInstanceId`);
+    const jar = (name, v) => ({ name, bytes: Buffer.from(`${name} ${v} ${Date.now()}`) });
+    const build = (version, jars, overrides) => {
+      const files = jars.map(({ name, bytes }) => {
+        const url = `https://cdn.modrinth.com/data/fakepack/${version}/${name}`;
+        served.set(url, bytes);
+        return { path: `mods/${name}`, hashes: { sha1: sha('sha1', bytes), sha512: sha('sha512', bytes) }, downloads: [url], fileSize: bytes.length };
+      });
+      const file = path.join(work, `fake-${version}.mrpack`);
+      writeZip(file, [{ name: 'modrinth.index.json', data: Buffer.from(JSON.stringify({ formatVersion: 1, game: 'minecraft', name: 'Fake Pack', versionId: version, dependencies: { minecraft: '1.21.1', 'fabric-loader': '0.16.0' }, files })) },
+        ...Object.entries(overrides).map(([n, t]) => ({ name: `overrides/${n}`, data: Buffer.from(t) }))]);
+      const bytes = fs.readFileSync(file), url = `https://cdn.modrinth.com/data/fakepack/${version}/pack-${version}.mrpack`;
+      served.set(url, bytes);
+      return { id: `pv-${version}`, projectId: 'FAKEPACK', name: `Fake Pack ${version}`, versionNumber: version, channel: 'release', gameVersions: ['1.21.1'], loaders: ['fabric'], dependencies: [],
+        date: `2025-0${version[0]}-01T00:00:00Z`, file: { url, filename: `pack-${version}.mrpack`, size: bytes.length, sha1: sha('sha1', bytes), sha512: sha('sha512', bytes) } };
+    };
+    const a1 = jar('a-1.jar', 1), b = jar('b.jar', 1), c = jar('c.jar', 1), a2 = jar('a-2.jar', 2), d = jar('d.jar', 1);
+    const v1 = build('1.0.0', [a1, b, c], { 'config/a.toml': 'a=1', 'config/b.toml': 'b=1' });
+    const v2 = build('2.0.0', [a2, b, d], { 'config/a.toml': 'a=2', 'config/b.toml': 'b=1', 'config/c.toml': 'c=1' });
+    const listed = [v2];
+    modrinth.getVersion = async (p, id) => [v1, v2].find((v) => v.id === id) || real.getVersion(p, id);
+    modrinth.versions = async (id, o) => (id === 'FAKEPACK' ? [...listed, v1] : real.versions(id, o));
+    let id = null;
+    try {
+      const made = await callApi('modpack.install', { source: 'modrinth', projectId: 'FAKEPACK', versionId: v1.id, title: 'Fake Pack', icon: '' });
+      expect(made.ok, `pack not installed: ${JSON.stringify(made).slice(0, 300)}`);
+      id = made.data.id;
+      const inst = made.data.config.instances.find((i) => i.id === id);
+      const at = (rel) => path.join(inst.path, rel);
+      expect(inst.pack && inst.pack.versionId === v1.id && inst.pack.versionName === '1.0.0' && inst.pack.gameVersion === '1.21.1' && inst.pack.loader === 'fabric', `pack link: ${JSON.stringify(inst.pack)}`);
+      expect(inst.loaderVersion === '0.16.0', `the pack's loader build was not kept: ${inst.loaderVersion}`);
+      expect(['mods/a-1.jar', 'mods/b.jar', 'mods/c.jar', 'config/a.toml'].every((r) => fs.existsSync(at(r))), 'the pack was not unpacked');
+
+      // What the person does after: edits a config file, deletes a mod, adds one of their own.
+      fs.writeFileSync(at('config/a.toml'), 'a=mine');
+      fs.rmSync(at('mods/b.jar'));
+      expect((await callApi('install', { source: 'modrinth', projectId: 'AANobbMI', type: 'mod', gameVersion: '1.21.1', loader: 'fabric', title: 'Sodium' })).ok, 'Sodium not installed');
+      const sodium = fs.readdirSync(at('mods')).find((f) => /sodium/i.test(f));
+      expect(sodium, 'no Sodium file');
+
+      const check = (await callApi('modpack.checkUpdate', { id })).data;
+      expect(check.update && check.update.versionName === '2.0.0' && check.current.versionName === '1.0.0', `update check: ${JSON.stringify(check)}`);
+
+      // On the Instances page: the button, the question, the update.
+      await js(`api('config.get').then((c) => { setConfig(c, { follow: true }); packUpdates.clear(); go('instances'); })`);
+      await waitFor(`[...document.querySelectorAll('#view .row-actions .btn')].some(b => b.textContent === 'Update to 2.0.0' && !b.disabled)`, 'the update button');
+      await shot('36-pack-update');
+      await js(`[...document.querySelectorAll('#view .row-actions .btn')].find(b => b.textContent === 'Update to 2.0.0').click()`);
+      await waitFor(`!document.querySelector('#overlay').hidden && /1\\.0\\.0 to 2\\.0\\.0/.test(document.querySelector('#overlay').textContent)`, 'the question');
+      await pressIn('Cancel');
+      await sleep(300);
+      expect(fs.existsSync(at('mods/a-1.jar')) && !fs.existsSync(at('mods/a-2.jar')), 'Cancel still updated');
+      await js(`[...document.querySelectorAll('#view .row-actions .btn')].find(b => b.textContent === 'Update to 2.0.0').click()`);
+      await waitFor(`!document.querySelector('#overlay').hidden`, 'the question again');
+      await pressIn('Update');
+      await waitFor(`(S.cfg.instances.find(i => i.id === '${id}') || {}).pack && S.cfg.instances.find(i => i.id === '${id}').pack.versionId === '${v2.id}'`, 'the update to finish', 90000);
+      await sleep(400);
+
+      const mods2 = fs.readdirSync(at('mods')).sort();
+      expect(mods2.join() === ['a-2.jar', 'd.jar', sodium].sort().join(), `after the update the mods are ${mods2}`); // a replaced, c dropped, d new, b stays deleted, Sodium kept
+      expect(fs.readFileSync(at('config/a.toml'), 'utf8') === 'a=mine', 'the person\'s edit of a config file was overwritten');
+      expect(fs.readFileSync(at('config/c.toml'), 'utf8') === 'c=1', 'a new config file of the pack was not added');
+      expect(!fs.readdirSync(inst.path).some((f) => f.startsWith('.modion-update')), 'the staging folder was left behind');
+      expect(await js(`[...document.querySelectorAll('#toasts .toast')].some(t => /Modpack updated/.test(t.textContent) && /1 edited config file kept/.test(t.textContent))`), 'no summary toast');
+      expect(await js(`Boolean(document.querySelector('#view .row-actions .btn:disabled') && [...document.querySelectorAll('#view .row-actions .btn')].some(b => b.textContent === 'Up to Date'))`), 'the button does not say "Up to Date" now');
+      expect((await callApi('modpack.checkUpdate', { id })).data.update === null, 'the same version is offered again');
+      expect((await callApi('modpack.update', { id })).code === 'UP_TO_DATE', 'an update with nothing newer was not refused');
+
+      // The library says who is who after the update.
+      await js(`S.cfg.activeInstanceId === '${id}' || api('instances.setActive', { id: '${id}' }).then(setConfig); updateCache.clear(); S.library.type = 'mod'; S.library.source = ''; S.library.origin = ''; go('library')`);
+      await waitFor(`document.querySelectorAll('#view .list .row').length === 3`, 'library rows');
+      const tags = await js(`Object.fromEntries([...document.querySelectorAll('#view .list .row')].map(r => [r.dataset.origin, r.querySelector('.row-title').textContent]))`);
+      expect(tags.added === 'Sodium' && tags.pack, `origins after the update: ${JSON.stringify(tags)}`);
+
+      // A pack that needs a mod the person updated themselves keeps their file instead of adding a second one.
+      const a3 = jar('a-3.jar', 3);
+      const v3 = build('3.0.0', [a3, d], { 'config/a.toml': 'a=3' });
+      listed.unshift(v3);
+      modrinth.getVersion = async (p, vid) => [v1, v2, v3].find((v) => v.id === vid) || real.getVersion(p, vid);
+      const r3 = await callApi('modpack.update', { id });
+      expect(r3.ok && r3.data.to === '3.0.0' && r3.data.keptConfigs === 1, `third update: ${JSON.stringify(r3).slice(0, 300)}`);
+      expect(fs.readdirSync(at('mods')).sort().join() === ['a-3.jar', 'd.jar', sodium].sort().join(), `after the third update: ${fs.readdirSync(at('mods'))}`);
+      // A running game blocks an update.
+      expect((await callApi('modpack.checkUpdate', { id: 'nope' })).code === 'GONE', 'an unknown instance was accepted');
+    } finally {
+      Object.assign(modrinth, real);
+      if (id) await callApi('instances.delete', { id });
+      await callApi('instances.setActive', { id: before });
+      await js(`api('config.get').then((c) => { setConfig(c, { follow: true }); go('browse'); })`);
+    }
+  });
+
+  await step('instance settings: change the game version, mod loader and loader build', async () => {
+    const before = await js(`S.cfg.activeInstanceId`);
+    const inst = await freshInstance('Versions');
+    const home = path.dirname(inst.path);
+    const comps = () => JSON.parse(fs.readFileSync(path.join(home, 'mmc-pack.json'), 'utf8')).components.map((c) => `${c.uid}@${c.version}`);
+    try {
+      await js(`go('instances')`);
+      await js(`[...document.querySelectorAll('#view .row')].find(r => r.textContent.includes('Versions')).querySelectorAll('.btn')`.replace('querySelectorAll(\'.btn\')', 'querySelectorAll(\'.btn\')') + `.forEach(b => b.textContent === 'Settings' && b.click())`);
+      await waitFor(`document.querySelector('#overlay .range') && document.querySelectorAll('#overlay .bar select').length >= 3`, 'settings screen with the game panel');
+      await waitFor(`!/Loading/.test(document.querySelector('#overlay').textContent) && document.querySelectorAll('#overlay .bar select')[2].options.length > 5`, 'the loader builds');
+      await shot('37-game-settings');
+      const sel = (n) => `document.querySelectorAll('#overlay .bar select')[${n}]`;
+      const set = (n, value) => js(`(() => { const s = ${sel(n)}; s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change')); })()`);
+      expect(await js(`${sel(0)}.value === '1.21.1' && ${sel(1)}.value === 'fabric'`), 'the settings do not show the instance\'s version and loader');
+      // To Forge on 1.20.1, with a build picked by hand.
+      await set(0, '1.20.1');
+      await set(1, 'forge');
+      await waitFor(`document.querySelectorAll('#overlay .bar select')[2].options.length > 5 && !document.querySelectorAll('#overlay .bar select')[2].disabled`, 'Forge builds');
+      const builds = await js(`[...${sel(2)}.options].map(o => o.value)`);
+      expect(builds[0] === '' && builds.length > 5, `builds: ${builds}`);
+      const chosen = builds[3];
+      await set(2, chosen);
+      await js(`[...document.querySelectorAll('#overlay .btn')].find(b => b.textContent === 'Save').click()`);
+      await waitFor(`document.querySelector('#overlay').hidden`, 'saved');
+      let now = (await callApi('config.get')).data.instances.find((i) => i.id === inst.id);
+      expect(now.gameVersion === '1.20.1' && now.loader === 'forge' && now.loaderVersion === chosen, `record: ${JSON.stringify(now)}`);
+      expect(comps().includes('net.minecraft@1.20.1') && comps().includes(`net.minecraftforge@${chosen}`) && !comps().some((c) => c.startsWith('net.fabricmc')), `Prism's parts: ${comps()}`);
+      expect(await js(`S.browse.gameVersion === '1.20.1' && S.browse.loader === 'forge'`), 'browsing did not follow the new version');
+      // A version the loader has no build for, and one that does not exist, are refused with nothing changed.
+      expect((await callApi('instances.setGame', { id: inst.id, gameVersion: '1.20.1', loader: 'forge', loaderVersion: '0.0.0-nope' })).code === 'NO_LOADER_VERSION', 'a loader build that does not exist was accepted');
+      expect((await callApi('instances.setGame', { id: inst.id, gameVersion: '9.99', loader: '' })).ok === false, 'a game version that does not exist was accepted');
+      expect((await callApi('instances.setGame', { id: inst.id, gameVersion: '', loader: '' })).code === 'BAD_REQUEST', 'no game version was accepted');
+      now = (await callApi('config.get')).data.instances.find((i) => i.id === inst.id);
+      expect(now.gameVersion === '1.20.1' && comps().includes('net.minecraft@1.20.1'), 'a refused change was applied anyway');
+      // Back to a plain game: the loader parts leave Prism's list and the build is forgotten.
+      const plain = await callApi('instances.setGame', { id: inst.id, gameVersion: '1.21.1', loader: '' });
+      expect(plain.ok && !plain.data.instances.find((i) => i.id === inst.id).loaderVersion && comps().join() === 'net.minecraft@1.21.1', `plain: ${comps()}`);
+      // The older "Edit" form changes the same files.
+      const edit = await callApi('instances.update', { id: inst.id, name: 'Versions', gameVersion: '1.21.1', loader: 'fabric' });
+      expect(edit.ok && comps().includes('net.fabricmc.intermediary@1.21.1') && comps().some((c) => c.startsWith('net.fabricmc.fabric-loader@')), `edit form: ${comps()}`);
+      // An instance of another launcher: only Modion's record changes, and the screen says so.
+      const other = await js(`S.cfg.instances.find(i => !i.managed).id`);
+      await js(`go('instances')`);
+      await js(`(() => { const r = [...document.querySelectorAll('#view .row')].find(r => !r.textContent.includes('Versions') && [...r.querySelectorAll('.btn')].some(b => b.textContent === 'Settings')); [...r.querySelectorAll('.btn')].find(b => b.textContent === 'Settings').click(); })()`);
+      await waitFor(`document.querySelector('#overlay .range') && /belongs to another launcher/.test(document.querySelector('#overlay').textContent)`, 'the note for another launcher');
+      expect(await js(`document.querySelectorAll('#overlay .bar select')[2].disabled`), 'the loader build can be picked for an instance that is not Modion\'s');
+      await pressIn('Cancel');
+      expect((await callApi('instances.setGame', { id: other, gameVersion: '1.21.1', loader: 'fabric', loaderVersion: '0.16.0' })).data.instances.find((i) => i.id === other).loaderVersion === undefined, 'a loader build was stored for another launcher\'s instance');
+    } finally {
+      await callApi('instances.delete', { id: inst.id });
+      await callApi('instances.setActive', { id: before });
+      await js(`api('config.get').then((c) => { setConfig(c, { follow: true }); go('browse'); })`);
+    }
+  });
+
+  await step('an instance Modion starts itself can change its version and loader build too', async () => {
+    const before = await js(`S.cfg.activeInstanceId`);
+    await callApi('settings.setLaunch', { mode: 'account', offlineName: '' });
+    let inst = null;
+    try {
+      inst = await freshInstance('Own Versions');
+      expect(inst.movable, 'not an instance of Modion\'s own kind');
+      const meta = () => JSON.parse(fs.readFileSync(path.join(inst.home, 'instance.json'), 'utf8'));
+      const builds = (await callApi('loader.versions', { loader: 'fabric', gameVersion: '1.20.1' })).data;
+      expect(builds.length > 5 && builds.every((b) => typeof b.version === 'string'), 'no loader builds');
+      expect((await callApi('loader.versions', { loader: '', gameVersion: '1.20.1' })).code === 'BAD_REQUEST', 'builds asked for no loader');
+      const pick = builds[4].version;
+      const r = await callApi('instances.setGame', { id: inst.id, gameVersion: '1.20.1', loader: 'fabric', loaderVersion: pick });
+      const now = r.data.instances.find((i) => i.id === inst.id);
+      expect(r.ok && now.gameVersion === '1.20.1' && now.loaderVersion === pick, `record: ${JSON.stringify(r).slice(0, 300)}`);
+      expect(meta().gameVersion === '1.20.1' && meta().loader === 'fabric' && meta().loaderVersion === pick, `instance.json: ${JSON.stringify(meta())}`);
+      // Changing the loader drops the build, since it belonged to the other one.
+      const q = await callApi('instances.setGame', { id: inst.id, gameVersion: '1.20.1', loader: 'quilt' });
+      expect(q.ok && !q.data.instances.find((i) => i.id === inst.id).loaderVersion && meta().loader === 'quilt' && meta().loaderVersion === undefined, `quilt: ${JSON.stringify(meta())}`);
+      // Found again after a rescan, the record comes back as it was.
+      await callApi('instances.setGame', { id: inst.id, gameVersion: '1.20.1', loader: 'fabric', loaderVersion: pick });
+      const again = (await callApi('libraries.rescan')).data.instances.find((i) => i.id === inst.id);
+      expect(again.loaderVersion === pick && again.gameVersion === '1.20.1', 'a rescan lost the loader build');
+    } finally {
+      if (inst) await callApi('instances.delete', { id: inst.id });
+      await callApi('settings.setLaunch', { mode: 'prism', offlineName: '' });
+      await callApi('instances.setActive', { id: before });
+      await js(`api('config.get').then((c) => { setConfig(c, { follow: true }); go('browse'); })`);
+    }
+  });
+
+  await step('the log tab follows the selected instance, to its newest log (older ones are packed away)', async () => {
+    const zlib = require('zlib');
+    const before = await js(`S.cfg.activeInstanceId`);
+    const a = await freshInstance('Log A'), b = await freshInstance('Log B');
+    try {
+      fs.mkdirSync(path.join(a.path, 'logs'), { recursive: true });
+      fs.mkdirSync(path.join(b.path, 'logs'), { recursive: true });
+      fs.writeFileSync(path.join(a.path, 'logs', 'latest.log'), '[12:00:00] [main/INFO]: line of A\n');
+      fs.writeFileSync(path.join(b.path, 'logs', '2024-01-01-1.log.gz'), zlib.gzipSync('[10:00:00] [main/INFO]: old line of B\n'));
+      fs.writeFileSync(path.join(b.path, 'logs', '2024-01-02-1.log.gz'), zlib.gzipSync('[11:00:00] [main/INFO]: newest line of B\n'));
+      fs.utimesSync(path.join(b.path, 'logs', '2024-01-01-1.log.gz'), new Date(2024, 0, 1), new Date(2024, 0, 1));
+      fs.utimesSync(path.join(b.path, 'logs', '2024-01-02-1.log.gz'), new Date(2024, 0, 2), new Date(2024, 0, 2));
+      await callApi('instances.setActive', { id: a.id });
+      await js(`api('config.get').then(setConfig); S.library.type = 'log'; go('library')`);
+      await waitFor(`/line of A/.test(document.querySelector('#view .log').textContent)`, 'the log of A');
+      // Selecting B from anywhere (the picker can be open over this page) brings B's log, without the page being redrawn by hand.
+      await js(`api('instances.setActive', { id: '${b.id}' }).then((c) => setConfig(c))`);
+      await waitFor(`/newest line of B/.test(document.querySelector('#view .log').textContent)`, 'the newest log of B', 8000);
+      const shownLog = await js(`document.querySelector('#view .log').textContent`);
+      expect(!/line of A/.test(shownLog) && !/old line of B/.test(shownLog), `the view still holds the other log: ${shownLog}`);
+      expect(await js(`/Game log of Log B/.test(document.querySelector('#view').textContent) && /2024-01-02-1\\.log\\.gz/.test(document.querySelector('#view .path').textContent)`), 'the heading and file name do not name B and its log');
+      await shot('38-log-follows');
+      // The live log wins as soon as there is one.
+      fs.writeFileSync(path.join(b.path, 'logs', 'latest.log'), '[12:30:00] [main/INFO]: live line of B\n');
+      await waitFor(`/live line of B/.test(document.querySelector('#view .log').textContent)`, 'the live log of B', 8000);
+      // The same on the Instances page's own Log tab.
+      await js(`S.instancesTab = 'log'; go('instances')`);
+      await waitFor(`/live line of B/.test(document.querySelector('#view .log').textContent)`, 'B on the instances log');
+      await js(`api('instances.setActive', { id: '${a.id}' }).then((c) => setConfig(c))`);
+      await waitFor(`/line of A/.test(document.querySelector('#view .log').textContent) && !/live line of B/.test(document.querySelector('#view .log').textContent)`, 'A on the instances log', 8000);
+      await js(`S.instancesTab = 'all'`);
+    } finally {
+      await callApi('instances.delete', { id: a.id });
+      await callApi('instances.delete', { id: b.id });
+      await callApi('instances.setActive', { id: before });
+      await js(`S.library.type = 'mod'; api('config.get').then((c) => { setConfig(c, { follow: true }); go('browse'); })`);
+    }
+  });
+
+  await step('a website-only mod brings its dependencies, and asks before opening pages for the ones that are website-only too', async () => {
+    const cf = require('../src/curseforge'), web = require('../src/webinstall');
+    const real = { hasKey: cf.hasKey, getVersion: cf.getVersion, brief: cf.brief, latest: cf.latest, versions: cf.versions, identify: cf.identify, fingerprints: cf.fingerprints, open: web.open };
+    const before = await js(`S.cfg.activeInstanceId`);
+    const inst = await freshInstance('Website Deps');
+    const mk = (id, projectId, filename, { blocked = false, deps = [] } = {}) => {
+      const bytes = Buffer.from(`${filename} ${Date.now()}`), url = `https://edge.forgecdn.net/files/${id}/${filename}`;
+      served.set(url, bytes);
+      return { id, projectId, name: filename, versionNumber: filename, channel: 'release', date: '2025-01-01T00:00:00Z', gameVersions: ['1.21.1'], loaders: ['fabric'],
+        dependencies: deps.map((p) => ({ projectId: p, versionId: null })), blocked,
+        file: blocked ? null : { url, filename, size: bytes.length, sha1: sha('sha1', bytes) }, expected: { filename, size: bytes.length, sha1: sha('sha1', bytes) }, bytes };
+    };
+    const all = { m1: mk('m1', 'M', 'website-mod.jar', { blocked: true, deps: ['D', 'E'] }), d1: mk('d1', 'D', 'dependency-d.jar'), e1: mk('e1', 'E', 'dependency-e.jar', { blocked: true }) };
+    const byProject = { M: all.m1, D: all.d1, E: all.e1 };
+    cf.hasKey = () => true;
+    cf.getVersion = async (p, v) => all[v];
+    cf.brief = async (p) => ({ title: `Project ${p}`, icon: null, url: `https://www.curseforge.com/minecraft/mc-mods/${p.toLowerCase()}` });
+    cf.latest = async (p) => byProject[p] || null;
+    cf.identify = async () => ({});
+    cf.fingerprints = async () => ({});
+    const opened = [];
+    web.open = async (o) => {
+      opened.push(o.url);
+      const file = Object.values(all).find((v) => v.expected.filename === o.expect.filename);
+      fs.mkdirSync(o.destDir, { recursive: true });
+      const tmp = path.join(o.destDir, `${o.expect.filename}.part`);
+      fs.writeFileSync(tmp, file.bytes);
+      return { tmp, filename: o.expect.filename };
+    };
+    try {
+      await js(`updateCache.clear(); doWebInstall({ source: 'curseforge', projectId: 'M', versionId: 'm1', type: 'mod', title: 'Website Mod', gameVersion: '1.21.1', loader: 'fabric' }); 0`); // not awaited: it waits on the question below
+      // The mod itself is in; its downloadable dependency came on its own; the other one is asked about.
+      await waitFor(`!document.querySelector('#overlay').hidden && /More files only on the website/.test(document.querySelector('#overlay').textContent)`, 'the question about the website-only dependency', 60000);
+      const folder = () => fs.readdirSync(path.join(inst.path, 'mods')).sort().join();
+      expect(folder() === 'dependency-d.jar,website-mod.jar', `before answering: ${folder()}`);
+      expect(await js(`/Project E/.test(document.querySelector('#overlay').textContent) && /Website Mod/.test(document.querySelector('#overlay').textContent)`), 'the question does not name the mod and what it needs');
+      await shot('39-website-dependency');
+      await pressIn('Open the Pages');
+      await waitFor(`document.querySelector('#overlay').hidden && !busy.size`, 'the second page', 60000);
+      expect(folder() === 'dependency-d.jar,dependency-e.jar,website-mod.jar', `after the pages: ${folder()}`);
+      expect(opened.length === 2 && opened[0].endsWith('/files/m1') && opened[1].endsWith('/files/e1'), `pages opened: ${opened}`);
+      expect(await js(`['curseforge:M', 'curseforge:D', 'curseforge:E'].every(k => k in S.cfg.installed)`), `installed: ${await js(`Object.keys(S.cfg.installed)`)}`);
+      // Declining leaves the rest alone and says so.
+      fs.rmSync(path.join(inst.path, 'mods', 'dependency-e.jar'));
+      opened.length = 0;
+      await js(`S.cfg.installed = {}; doWebInstall({ source: 'curseforge', projectId: 'M', versionId: 'm1', type: 'mod', title: 'Website Mod', gameVersion: '1.21.1', loader: 'fabric' }); 0`); // not awaited: it waits on the question below
+      await waitFor(`!document.querySelector('#overlay').hidden && /More files only on the website/.test(document.querySelector('#overlay').textContent)`, 'the question again', 60000);
+      await pressIn('Cancel');
+      await waitFor(`!busy.size && [...document.querySelectorAll('#toasts .toast')].some(t => /may not start without/.test(t.textContent))`, 'the warning');
+      expect(opened.length === 1 && !fs.existsSync(path.join(inst.path, 'mods', 'dependency-e.jar')), `declining still opened pages: ${opened}`);
+    } finally {
+      Object.assign(cf, real);
+      web.open = real.open;
+      await callApi('instances.delete', { id: inst.id });
+      await callApi('instances.setActive', { id: before });
+      await js(`api('config.get').then((c) => { setConfig(c, { follow: true }); go('browse'); })`);
+    }
+  });
+
   await step('curseforge without a key explains itself', async () => {
     await js(`go('browse')`);
     await js(`[...document.querySelectorAll('.nav-item')].find(b => b.textContent === 'CurseForge').click()`);
@@ -1190,6 +1566,7 @@ require('../main.js').ready.then(async (win) => {
     await shot('11-settings');
   });
 
+  global.fetch = realFetch;
   console.log(problems.length ? `\nPROBLEMS:\n${problems.join('\n')}` : '\nNo problems.');
   fs.rmSync(work, { recursive: true, force: true });
   electron.app.exit(problems.length ? 1 : 0);

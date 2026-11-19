@@ -114,8 +114,9 @@ async function index(uid) {
   return versions;
 }
 
-// Which build of a loader goes with a game version, as Prism's metadata service has it.
-async function loaderBuild(loader, gameVersion, loaderVersion) {
+// The builds of a loader that go with a game version, newest first, as Prism's metadata
+// service has them: [{ version, recommended, stable }].
+async function loaderBuilds(loader, gameVersion) {
   const missing = new ApiError(`${LOADER_NAME[loader]} is not available for Minecraft ${gameVersion}.`, 'NO_LOADER_VERSION');
   let builds = await index(LOADER_UID[loader]);
   if (loader === 'fabric' || loader === 'quilt') {
@@ -124,12 +125,15 @@ async function loaderBuild(loader, gameVersion, loaderVersion) {
   } else {
     builds = builds.filter((v) => arr(v.requires).some((r) => r && r.uid === 'net.minecraft' && r.equals === gameVersion));
   }
-  // The index is newest first: take the recommended build, else the newest stable, else the newest.
-  // A modpack names the exact loader build it was made for; use it when Prism knows it.
-  const pick = builds.find((v) => loaderVersion && v.version === loaderVersion)
-    || builds.find((v) => v.recommended) || builds.find((v) => !v.type || v.type === 'release') || builds[0];
-  if (!pick) throw missing;
-  return pick.version;
+  if (!builds.length) throw missing;
+  return builds.map((v) => ({ version: v.version, recommended: Boolean(v.recommended), stable: !v.type || v.type === 'release' }));
+}
+
+// Which build of a loader goes with a game version: the recommended one, else the newest
+// stable, else the newest. A modpack (or the person) names an exact build; it is used when known.
+async function loaderBuild(loader, gameVersion, loaderVersion) {
+  const builds = await loaderBuilds(loader, gameVersion);
+  return (builds.find((v) => loaderVersion && v.version === loaderVersion) || builds.find((v) => v.recommended) || builds.find((v) => v.stable) || builds[0]).version;
 }
 
 // Prism's description of the game itself for a version (it lists patched libraries).
@@ -182,7 +186,7 @@ function check({ gameVersion, loader }) {
 
 // An instance of Modion's own kind, inside the given library folder, for when Modion
 // starts the game itself.
-function createOwn({ name, gameVersion, loader }, library) {
+function createOwn({ name, gameVersion, loader, loaderVersion }, library) {
   check({ gameVersion, loader });
   const clean = cleanName(name, gameVersion, loader);
   const dir = freshFolder(library, clean);
@@ -190,7 +194,7 @@ function createOwn({ name, gameVersion, loader }, library) {
   try {
     const game = path.join(dir, 'minecraft');
     fs.mkdirSync(game);
-    fs.writeFileSync(path.join(dir, 'instance.json'), JSON.stringify({ id, name: clean, gameVersion, loader: loader || '' }, null, 2));
+    fs.writeFileSync(path.join(dir, 'instance.json'), JSON.stringify({ id, name: clean, gameVersion, loader: loader || '', ...(loader && loaderVersion ? { loaderVersion } : {}) }, null, 2));
     return { id, path: game, name: clean, home: dir };
   } catch (e) {
     fs.rmSync(dir, { recursive: true, force: true }); // only ever the folder created just above
@@ -210,6 +214,28 @@ function rename(home, name) {
     }
   } catch (e) {
     throw new ApiError(`Could not rename the instance: ${e.code || e.message}.`, 'FS');
+  }
+}
+
+// Points a Prism instance Modion made at another game version, loader or loader build:
+// rewrites the parts of mmc-pack.json that name them and keeps the rest (the version-bound
+// LWJGL parts are dropped, as Prism's own "change version" does). Prism fetches what is new
+// the next time the instance starts.
+async function setComponents(home, gameVersion, loader, loaderVersion) {
+  const file = path.join(home, 'mmc-pack.json');
+  let pack = { components: [], formatVersion: 1 };
+  try { pack = { ...pack, ...JSON.parse(fs.readFileSync(file, 'utf8')) }; } catch (e) {
+    if (e.code !== 'ENOENT') throw new ApiError('This Prism instance\'s mmc-pack.json could not be read, so it was left alone.', 'BAD_PACK');
+  }
+  const ours = new Set(['net.minecraft', 'net.fabricmc.intermediary', ...Object.values(LOADER_UID), 'org.lwjgl', 'org.lwjgl3']);
+  const kept = arr(pack.components).filter((c) => c && typeof c.uid === 'string' && !ours.has(c.uid));
+  const parts = await components(gameVersion, loader, loaderVersion);
+  try {
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ ...pack, components: [...parts, ...kept] }, null, 4));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    throw new ApiError(`Could not update the Prism instance: ${e.code || e.message}.`, 'FS');
   }
 }
 
@@ -238,4 +264,4 @@ async function create({ name, gameVersion, loader, loaderVersion }) {
   }
 }
 
-module.exports = { prismInstalled, canCreate, describe, launch, create, createOwn, rename, cleanName, prismRoots, loaderBuild, loaderMeta, gameMeta };
+module.exports = { prismInstalled, canCreate, describe, launch, create, createOwn, rename, cleanName, prismRoots, loaderBuild, loaderBuilds, loaderMeta, gameMeta, setComponents };

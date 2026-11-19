@@ -65,6 +65,10 @@ function inspect(file) {
   }
 }
 
+const sha1Hex = (buf) => require('crypto').createHash('sha1').update(buf).digest('hex');
+// Paths are kept with forward slashes, whatever the system uses, so a record made on one OS reads on another.
+const relative = (gameDir, full) => path.relative(gameDir, full).split(path.sep).join('/');
+
 const FOLDER = { mod: 'mods', resourcepack: 'resourcepacks', shader: 'shaderpacks', datapack: 'datapacks' };
 
 // The downloads a pack asks for, as items for the downloader, plus what had to be left out.
@@ -86,7 +90,11 @@ async function downloads(pack, gameDir, curseforge) {
       // The format requires a checksum for every file; one without cannot be verified, so it is not fetched.
       const hex = (v, n) => typeof v === 'string' && new RegExp(`^[0-9a-fA-F]{${n}}$`).test(v);
       if (!hex(hashes.sha512, 128) && !hex(hashes.sha1, 40)) { skipped.push({ title: path.basename(f.path), reason: 'the pack gives no checksum for it' }); continue; }
-      items.push({ url, sha512: hex(hashes.sha512, 128) ? hashes.sha512 : undefined, sha1: hex(hashes.sha1, 40) ? hashes.sha1 : undefined, size: Number(f.fileSize) || 0, dir: path.dirname(full), filename: path.basename(full) });
+      items.push({
+        url, sha512: hex(hashes.sha512, 128) ? hashes.sha512 : undefined, sha1: hex(hashes.sha1, 40) ? hashes.sha1 : undefined, size: Number(f.fileSize) || 0, dir: path.dirname(full), filename: path.basename(full),
+        // What a later update compares: where the file goes, and which file it is.
+        rel: relative(gameDir, full), sig: String(hex(hashes.sha1, 40) ? hashes.sha1 : hashes.sha512).toLowerCase(), site: 'modrinth',
+      });
     }
     return { items, skipped, blocked };
   }
@@ -114,30 +122,48 @@ async function downloads(pack, gameDir, curseforge) {
     if (!v) { skipped.push({ title: `File ${id}`, reason: 'CurseForge no longer has it' }); continue; }
     if (!v.file) {
       const filename = (v.expected && v.expected.filename) || '';
-      blocked.push({ projectId: String(v.projectId), fileId: String(v.id), title: v.name, filename, type: typeOf(v, filename) });
+      const type = typeOf(v, filename);
+      blocked.push({ projectId: String(v.projectId), fileId: String(v.id), title: v.name, filename, type, rel: filename ? `${FOLDER[type]}/${path.basename(filename)}` : '' });
       continue;
     }
     const full = inside(gameDir, path.join(FOLDER[typeOf(v, v.file.filename)], path.basename(v.file.filename)));
-    items.push({ ...v.file, dir: path.dirname(full), filename: path.basename(full) });
+    items.push({ ...v.file, dir: path.dirname(full), filename: path.basename(full), rel: relative(gameDir, full), sig: `cf:${v.id}`, site: 'curseforge', projectId: String(v.projectId) });
   }
   return { items, skipped, blocked };
 }
 
-// Copies the pack's bundled files (configs, resource packs, ...) into the game folder.
-async function unpackOverrides(pack, gameDir) {
-  let total = 0, count = 0;
+// The pack's bundled files (configs, resource packs, ...) as { rel, full, entry }, each
+// checked to land inside the game folder.
+function overrideFiles(pack, gameDir) {
+  const out = [];
+  let total = 0;
   for (const prefix of pack.overrides) {
     for (const entry of pack.zip.entries.values()) {
       if (!entry.name.startsWith(prefix) || entry.name.endsWith('/')) continue;
       const full = inside(gameDir, entry.name.slice(prefix.length));
       total += entry.size;
       if (total > MAX_TOTAL) throw bad('it unpacks to more than Modion accepts');
-      await fsp.mkdir(path.dirname(full), { recursive: true });
-      await fsp.writeFile(full, pack.zip.read(entry));
-      count++;
+      out.push({ rel: relative(gameDir, full), full, entry });
     }
   }
-  return count;
+  return out;
 }
 
-module.exports = { inspect, downloads, unpackOverrides };
+// Copies the pack's bundled files into the game folder. `skip(file, bytes)` may keep one
+// back (an update leaves alone what the person has changed). Returns how many were written
+// and the checksum of every file the pack has, written or not: { count, hashes }.
+async function unpackOverrides(pack, gameDir, skip) {
+  const hashes = {};
+  let count = 0;
+  for (const f of overrideFiles(pack, gameDir)) {
+    const bytes = pack.zip.read(f.entry);
+    hashes[f.rel] = sha1Hex(bytes);
+    if (skip && (await skip(f, bytes, hashes[f.rel]))) continue;
+    await fsp.mkdir(path.dirname(f.full), { recursive: true });
+    await fsp.writeFile(f.full, bytes);
+    count++;
+  }
+  return { count, hashes };
+}
+
+module.exports = { inspect, downloads, unpackOverrides, sha1Hex };

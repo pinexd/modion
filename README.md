@@ -100,11 +100,14 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
   downloads from the website, Modion lists them after installing the pack and can open
   their pages one by one, marking each as it is fetched. The list stays on the instance
   ("Left Out") until the files are installed.
-- **Instance settings** – the Settings button on an instance (Instances page): which Java to
-  use (automatic, one found on the computer, or one you browse to), a memory slider, extra
-  Java arguments and environment variables. They apply when Modion starts the game itself.
-  If the Java arguments contain `-Xmx` or `-Xms`, those decide the memory and the slider is
-  switched off.
+- **Instance settings** – the Settings button on an instance (Instances page): the game
+  version, mod loader and the build of the loader (automatic, or any build that exists for
+  that game version; for an instance Modion made, or keeps itself, the files that start the
+  game change with it, for one from another launcher only what Modion offers for it does);
+  which Java to use (automatic, one found on the computer, or one you browse to), a memory
+  slider, extra Java arguments and environment variables. The Java settings apply when Modion
+  starts the game itself. If the Java arguments contain `-Xmx` or `-Xms`, those decide the
+  memory and the slider is switched off.
 - **Browse** – pick Modrinth or CurseForge in the sidebar, a content type in the tabs. Results
   are filtered to the active instance's version and loader. Several categories can be ticked
   at once; results are then the ones in all of them. "Hide installed" leaves out what the
@@ -112,17 +115,31 @@ the application menu. `dev/build-release.sh <version> <folder>` builds the relea
 - **Modpacks** – the first tab on the Modrinth and CurseForge pages (Mods is still the one
   that opens). Installing a modpack creates a new instance from it; the version and loader
   filters there are your own choice, not the selected instance's.
+- **Updating a modpack** – an instance downloaded through Modion remembers which pack and
+  file it came from. The Instances page looks for a newer file of the same pack (same game
+  version and loader, and no less stable than yours) and offers "Update to ...". The new
+  files are fetched first, so a failed download changes nothing. Then files the new version
+  replaces or drops go to the trash; a mod you switched off stays off; a mod you deleted
+  stays deleted; mods you added or updated yourself stay (the pack's copy is not added next
+  to yours); and a config file you edited keeps your version when the pack changed it too.
+  Instances imported from a file on disk, or downloaded by an older Modion, have no pack to
+  update from.
 - **Project page** – description, gallery and file list. *Install* takes the newest file that
   fits the instance and pulls in required dependencies; the *Files* tab installs a specific one.
 - **Library** – what is in the instance, including files Modion did not install (identified
   by hash through Modrinth). Disable, re-enable or remove (to the trash).
-  Each list has a search field. The Log tab follows the game's log, with a search of its own
-  and checkboxes for errors, warnings, info and debug lines.
+  Each list has a search field and can be narrowed to one source (Modrinth, CurseForge or
+  unidentified files); in an instance made from a modpack also to what you added, what you
+  updated, or what came with the pack. The Log tab follows the game's log, with a search of
+  its own and checkboxes for errors, warnings, info and debug lines. It follows the selected
+  instance, and shows the newest log it has when the game has not run lately (older logs
+  are the packed `.log.gz` files in `logs`).
 - **Updates** – in the Library, a green arrow appears beside a file when the site it came
   from has a newer one for the instance's game version and loader; "Update All" does them
   in one go. In an instance made from a modpack, "Update All" asks twice first, since a
   pack's mods are chosen to work together, and mods you added yourself are marked
-  "Added by you". An existing instance can be marked as a modpack in its Settings.
+  "Added by you". A mod that came with the pack and that you moved to another file is
+  marked "Updated by you". An existing instance can be marked as a modpack in its Settings.
 
 ### CurseForge
 
@@ -130,7 +147,9 @@ CurseForge only serves apps that send an API key. Get a free one at
 <https://console.curseforge.com/> and paste it under Settings. Authors can switch off
 third-party downloads for their project. For those files Modion opens the file's page on
 curseforge.com in a separate window; you press Download there, and Modion puts the file in
-the instance. With a key set, mods installed from one site also show as installed on the other.
+the instance, together with whatever that mod requires (a required mod that is website-only
+too is asked about first, and then opened the same way). With a key set, mods installed from
+one site also show as installed on the other.
 
 Released packages can carry a key of their own: a file named `curseforge.key` next to
 `main.js` is used when no key is saved in Settings. That file is never committed; the

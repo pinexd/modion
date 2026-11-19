@@ -707,7 +707,7 @@ async function doInstall(req) {
   if (busy.has(key)) return;
   busy.add(key);
   paintInstalls();
-  let fromWebsite = null;
+  let fromWebsite = null, needed = [];
   try {
     const r = await api('install', req);
     if (r && r.installed_ids) S.cfg.installed = r.installed_ids;
@@ -716,6 +716,7 @@ async function doInstall(req) {
     if (!req.versionId && !req.gameVersion) {
       toast('Newest file installed', 'This instance has no game version set, so compatibility was not checked.', { tone: 'gold', time: 9000 });
     }
+    needed = (r && r.blocked) || [];
   } catch (e) {
     // The author only offers this file on the website: carry on there.
     if (e.code === 'BLOCKED' && e.detail && e.detail.versionId) fromWebsite = { ...req, versionId: e.detail.versionId };
@@ -725,6 +726,24 @@ async function doInstall(req) {
     paintInstalls();
   }
   if (fromWebsite) return doWebInstall(fromWebsite); // awaited, so files updated in a row take their turn
+  if (needed.length) await fetchBlocked(needed, req.title);
+}
+
+// Files the one just installed needs, whose authors only offer them on the CurseForge
+// website: ask once, then open their pages one after the other.
+async function fetchBlocked(blocked, forTitle) {
+  const list = (Array.isArray(blocked) ? blocked : []).filter((b) => b && b.projectId && b.versionId);
+  if (!list.length) return;
+  const names = list.map((b) => b.title || `project ${b.projectId}`);
+  const one = list.length === 1;
+  const yes = await confirmScreen('More files only on the website', [
+    `${forTitle || 'This mod'} needs ${one ? 'one more mod' : `${list.length} more mods`}, but ${one ? 'its author only allows' : 'their authors only allow'} downloads from the CurseForge website: ${names.join(', ')}.`,
+    'Modion can open each one\'s page in turn. You press Download there, and Modion puts the file in place.'], 'Open the Pages');
+  if (!yes) {
+    toast('Not installed', `${forTitle || 'The mod'} may not start without ${names.join(', ')}.`, { tone: 'gold', time: 9000 });
+    return;
+  }
+  for (const b of list) await doWebInstall({ source: 'curseforge', projectId: b.projectId, versionId: b.versionId, type: 'mod', title: b.title, icon: b.icon, ...installTarget() });
 }
 
 // Opens the file's own page on CurseForge. The person presses Download there; Modion
@@ -740,15 +759,21 @@ async function doWebInstall(req) {
   busy.add(key);
   paintInstalls();
   toast('Download it on the website', 'This file is only offered on CurseForge. Press Download in the window that opens and Modion will put the file in place.', { time: 10000 });
+  let needed = [];
   try {
     const r = await api('install.viaWebsite', req);
     if (r && r.installed_ids) S.cfg.installed = r.installed_ids;
+    updateCache.clear(); // what is installed changed
+    // What the file needs is installed the same way as for any other mod.
+    for (const s of (r && r.skipped) || []) toast('Heads up', `${s.title}: ${s.reason}`, { tone: 'gold', time: 9000 });
+    needed = (r && r.blocked) || [];
   } catch (e) {
     if (e.code !== 'CANCELLED') fail(e, 'Website download failed');
   } finally {
     busy.delete(key);
     paintInstalls();
   }
+  if (needed.length) await fetchBlocked(needed, req.title);
 }
 
 function tags(p, max = 6) {
@@ -1197,6 +1222,8 @@ function viewLog(v, inst) {
   note('Waiting for the game to write a log...');
   const poll = async () => {
     if (waiting || !out.isConnected) return;
+    // Another instance was selected (the picker can be open over this page): show its log.
+    if (S.cfg.activeInstanceId !== inst.id) { render(); return; }
     waiting = true;
     let r = null;
     try { r = await api('log.read', { id: inst.id, source, offset }); } catch {}
@@ -1245,16 +1272,28 @@ function viewLibrary(v) {
   if (lib.queryFor !== `${inst.id}:${lib.type}`) { lib.queryFor = `${inst.id}:${lib.type}`; lib.query = ''; } // a search belongs to the list it was typed over
   const find = h('input', { class: 'field find', type: 'search', placeholder: `Search these ${TYPES[lib.type].toLowerCase()}...`, spellcheck: false, value: lib.query || '', ariaLabel: 'Search this list',
     oninput: () => { lib.query = find.value; applySearch(); } });
-  const noMatch = h('div', { class: 'empty', hidden: true }, h('p', { class: 'dim' }, 'Nothing here matches the search.'));
+  const noMatch = h('div', { class: 'empty', hidden: true }, h('p', { class: 'dim' }, 'Nothing here matches the search and filters.'));
   let countText = '';
+  // Besides the search: which site a file came from and, in a modpack, who put it there.
+  // The choices are kept while moving between lists; "who" only means something for a modpack.
+  const origin = () => (inst.fromPack ? lib.origin || '' : '');
   const applySearch = () => {
     const words = wordsOf(find.value), rows = [...list.querySelectorAll('.row[data-find]')];
+    const site = lib.source || '', who = origin();
     let shown = 0;
-    for (const r of rows) { r.hidden = !matches(r.dataset.find, words); if (!r.hidden) shown++; }
+    for (const r of rows) {
+      r.hidden = !(matches(r.dataset.find, words) && (!site || r.dataset.source === site) && (!who || r.dataset.origin === who));
+      if (!r.hidden) shown++;
+    }
     noMatch.hidden = !rows.length || shown > 0;
-    summary.textContent = words.length && rows.length ? `${shown} of ${countText}` : countText;
+    summary.textContent = (words.length || site || who) && rows.length ? `${shown} of ${countText}` : countText;
   };
-  add(v, h('div', { class: 'bar' }, summary, find, note,
+  const filters = [
+    select([['', 'All sources'], ['modrinth', 'Modrinth'], ['curseforge', 'CurseForge'], ['unknown', 'Unidentified']], lib.source || '', (val) => { lib.source = val; applySearch(); }),
+    inst.fromPack && select([['', 'Everything'], ['added', 'Added by you'], ['updated', 'Updated by you'], ['pack', 'From the modpack']], origin(), (val) => { lib.origin = val; applySearch(); }),
+  ];
+  filters.forEach((f) => f && f.firstChild.setAttribute('aria-label', f === filters[0] ? 'Show files from one source' : 'Show files by who put them in'));
+  add(v, h('div', { class: 'bar' }, summary, find, filters, note,
       h('div', { class: 'push bar' }, updateAll, btn('Open Folder', () => api('library.openFolder', { type: lib.type }).catch(fail)))),
     list);
 
@@ -1342,13 +1381,14 @@ function viewLibrary(v) {
       const m = f.meta;
       const title = h('div', { class: `row-title ${f.enabled ? '' : 'faint'}` }, m ? m.title : f.name);
       const open = m && (() => openProject({ source: m.source, id: m.projectId, type, title: m.title, icon: m.icon, summary: '' }, 'library'));
-      return h('div', { class: `row ${open ? 'click' : ''}`, onclick: open || null, 'data-find': [m && m.title, f.name, m && (SOURCES[m.source] || m.source), m && m.versionName].filter(Boolean).join(' ').toLowerCase() },
+      return h('div', { class: `row ${open ? 'click' : ''}`, onclick: open || null, 'data-source': m ? m.source : 'unknown', 'data-origin': f.origin || '', 'data-find': [m && m.title, f.name, m && (SOURCES[m.source] || m.source), m && m.versionName].filter(Boolean).join(' ').toLowerCase() },
         slot(m && m.icon, 48),
         h('div', { class: 'row-main' },
           title,
           h('div', { class: 'faint row-title' }, [m && m.versionName, m ? SOURCES[m.source] || m.source : 'Unrecognised file', fmtSize(f.size)].filter(Boolean).join('  |  '),
-            // In an instance made from a modpack: what was put in afterwards.
-            m && m.added && inst.fromPack && h('span', { class: 'added-note', title: 'You installed this yourself; it did not come with the modpack.' }, 'Added by you')),
+            // In an instance made from a modpack: what was put in afterwards, and what was moved to another file.
+            f.origin === 'added' && h('span', { class: 'added-note', title: 'You put this in yourself; it did not come with the modpack.' }, 'Added by you'),
+            f.origin === 'updated' && h('span', { class: 'updated-note', title: 'This came with the modpack, and you moved it to another file.' }, 'Updated by you')),
           m && h('div', { class: 'faint row-title' }, f.name)),
         h('div', { class: 'row-actions' },
           check('Enabled', f.enabled, async (on, box) => {
@@ -1817,9 +1857,58 @@ async function instanceSettings(i) {
   args.addEventListener('input', drawMemory);
   drawMemory();
 
+  // Game version, mod loader and the build of the loader. For an instance Modion keeps the
+  // files that start the game are changed with it; for one that belongs to another launcher
+  // only what Modion offers for it changes.
+  let gameVersion = i.gameVersion || '', loader = i.loader || '', loaderVersion = i.loaderVersion || '';
+  const ours = Boolean(i.managed);
+  const buildRow = h('div', { class: 'bar' }), buildNote = h('p', { class: 'label' });
+  let builds = null, buildToken = 0; // null: none to show; 'loading'; { error }; or the list
+  const drawBuilds = () => {
+    const none = (label) => select([['', label]], '', () => {});
+    if (!loader) fill(buildRow, none('No mod loader'));
+    else if (!ours) fill(buildRow, none('Chosen in the launcher that owns this instance'));
+    else if (builds === 'loading') fill(buildRow, none('Loading versions...'));
+    else if (!Array.isArray(builds)) fill(buildRow, none('Automatic'));
+    else {
+      const pick = builds.find((b) => b.recommended) || builds[0];
+      const extra = loaderVersion && !builds.some((b) => b.version === loaderVersion) ? [[loaderVersion, `${loaderVersion} (not in the list)`]] : [];
+      fill(buildRow, select([['', `Automatic (${pick ? pick.version : 'recommended'})`], ...extra,
+        ...builds.map((b) => [b.version, `${b.version}${b.recommended ? '  (recommended)' : ''}${b.stable ? '' : '  (beta)'}`])], loaderVersion, (val) => { loaderVersion = val; }));
+    }
+    buildRow.querySelector('select') && (buildRow.querySelector('select').disabled = !loader || !ours || builds === 'loading' || !Array.isArray(builds));
+    buildNote.textContent = builds && builds.error ? `The list of loader versions could not be loaded: ${builds.error}`
+      : !loader ? 'Pick a mod loader above to choose its version.'
+        : ours ? 'Automatic picks the recommended build of the loader for this game version.' : '';
+    buildNote.className = builds && builds.error ? 'label red' : 'label';
+  };
+  const loadBuilds = async () => {
+    const mine = ++buildToken;
+    builds = null;
+    if (loader && gameVersion && ours) {
+      builds = 'loading';
+      drawBuilds();
+      try {
+        const r = await api('loader.versions', { loader, gameVersion });
+        if (mine === buildToken) builds = Array.isArray(r) ? r : [];
+      } catch (e) { if (mine === buildToken) builds = { error: e.message }; }
+    }
+    if (mine === buildToken) drawBuilds();
+  };
+  const gameRow = h('div', { class: 'bar' },
+    versionSelect(gameVersion, ours ? 'Pick a version' : 'Not set', (val) => { gameVersion = val; loaderVersion = ''; loadBuilds(); }),
+    select([['', ours ? 'Vanilla (no mods)' : 'Not set / vanilla'], ...Object.entries(LOADERS).slice(1)], loader, (val) => { loader = val; loaderVersion = ''; loadBuilds(); }));
+  loadBuilds();
+  const changedGame = () => gameVersion !== (i.gameVersion || '') || loader !== (i.loader || '') || loaderVersion !== (i.loaderVersion || '');
+
   const packBox = check('This instance is a modpack', Boolean(i.fromPack), () => {});
   const save = async () => {
     try {
+      if (changedGame()) {
+        setConfig(await api('instances.setGame', { id: i.id, gameVersion, loader, loaderVersion }), { follow: true });
+        updateCache.clear(); // what fits is not what fitted
+        searchToken++;
+      }
       setConfig(await api('instances.setSettings', {
         id: i.id, java, jvmArgs: args.value, env: env.value, fromPack: packBox.querySelector('input').checked,
         memory: auto || usesOwnMemory(args.value) ? null : Number(slider.value),
@@ -1831,6 +1920,11 @@ async function instanceSettings(i) {
   showScreen(`Settings: ${i.name}`,
     h('div', { class: 'screen-body' },
       h('div', { class: 'whose' }, h('div', { class: 'slot s48' }, instImg(i)), h('div', {}, h('div', { class: 'row-title' }, i.name), h('div', { class: 'faint small' }, instLabel(i)))),
+      h('div', { class: 'settings in-screen' },
+        h('div', { class: 'panel' }, h('h2', {}, 'Game version and loader'), gameRow, buildRow, buildNote,
+          h('p', { class: 'label' }, ours
+            ? 'Mods already in the instance are not changed. After switching, look through the Library for mods that no longer fit.'
+            : 'This instance belongs to another launcher. Changing these only changes which files Modion offers for it; change them in that launcher as well.'))),
       !info.direct && h('div', { class: 'bar warn' }, info.startedBy
         ? `These settings apply when Modion starts the game itself. Right now this instance is started through ${info.startedBy}, which has its own settings.`
         : 'These settings apply when Modion starts the game itself, which it cannot do for this instance with the current launch setting.'),
@@ -1847,6 +1941,58 @@ async function instanceSettings(i) {
     [btn('Cancel', closeScreen), btn('Save', save, 'green')], render);
 }
 
+// Newer files of the modpacks that instances were downloaded as, looked up when the
+// Instances page is shown: instance id -> { at, checking, update, error }. Kept for a while
+// so moving between pages does not ask again; a failed look is tried again after a minute.
+const packUpdates = new Map();
+const packBusy = new Set(); // instances being updated right now
+
+async function checkPack(i, redraw) {
+  const c = packUpdates.get(i.id);
+  if (c && (c.checking || Date.now() - c.at < (c.error ? 60000 : 600000))) return;
+  packUpdates.set(i.id, { at: Date.now(), checking: true }); // (the row being drawn already shows this)
+  try {
+    const r = await api('modpack.checkUpdate', { id: i.id });
+    packUpdates.set(i.id, { at: Date.now(), update: r && r.update ? r.update : null });
+  } catch (e) {
+    packUpdates.set(i.id, { at: Date.now(), error: e.message });
+  }
+  redraw();
+}
+
+async function runPackUpdate(i, redraw) {
+  const found = (packUpdates.get(i.id) || {}).update;
+  if (!found || packBusy.has(i.id)) return;
+  const yes = await confirmScreen(`Update ${i.pack.title || i.name}?`, [
+    `"${i.name}" goes from ${i.pack.versionName || 'its current version'} to ${found.versionName}.`,
+    'Mods you added, mods you updated yourself and config files you changed are kept. Files the new version replaces or drops go to the trash.',
+    found.website ? 'This version is only offered on the CurseForge website: a window opens, and you press Download there.' : 'Make a copy of your worlds first if they matter to you.'], 'Update');
+  if (!yes) return;
+  packBusy.add(i.id);
+  redraw();
+  try {
+    const r = await api('modpack.update', { id: i.id });
+    setConfig(r.config, { follow: true });
+    updateCache.clear();
+    const bits = [`${r.added} file${r.added === 1 ? '' : 's'} added or replaced`, `${r.removed} removed`];
+    if (r.keptMods) bits.push(`${r.keptMods} of your mod${r.keptMods === 1 ? '' : 's'} kept`);
+    if (r.keptConfigs) bits.push(`${r.keptConfigs} edited config file${r.keptConfigs === 1 ? '' : 's'} kept`);
+    toast('Modpack updated', `${r.name}: ${r.from || 'old version'} to ${r.to}. ${bits.join(', ')}.`, { time: 12000, icon: (S.cfg.instances.find((x) => x.id === r.id) || {}).icon });
+    if (r.changedGame) toast('Game version changed', 'This version of the pack asks for another Minecraft version or loader. The instance now uses it; the game files are fetched when you press Play.', { tone: 'gold', time: 12000 });
+    for (const sk of (r.skipped || []).slice(0, 4)) toast('Left out of the pack', `${sk.title}: ${sk.reason}`, { tone: 'gold', time: 12000 });
+    packUpdates.set(i.id, { at: Date.now(), update: null });
+    packBusy.delete(i.id);
+    redraw();
+    if (r.leftOut) leftOutScreen(r.id);
+    return;
+  } catch (e) {
+    if (e.code !== 'CANCELLED') fail(e, 'Modpack not updated');
+    packUpdates.delete(i.id);
+  }
+  packBusy.delete(i.id);
+  redraw();
+}
+
 function viewInstances(v) {
   if (S.instancesTab === 'log') {
     const inst = activeInst();
@@ -1854,7 +2000,7 @@ function viewInstances(v) {
     else add(v, h('div', { class: 'list' }, message(h('p', {}, 'No instance selected'), h('p', { class: 'dim' }, 'Select an instance to see its game log.'))));
     return;
   }
-  const redraw = () => { if (S.view === 'instances') render(); };
+  const redraw = () => { if (S.view === 'instances' && S.instancesTab !== 'log') render(); };
   const change = async (call, title) => {
     try { setConfig(await call, { follow: true }); } catch (e) { fail(e, title); }
     redraw();
@@ -1891,6 +2037,19 @@ function viewInstances(v) {
       } catch (e) { fail(e, 'Could not move'); }
       redraw();
     }, 'small');
+    // A modpack downloaded through Modion: its newest file, if there is a newer one than the instance has.
+    let packButton = null, packLine = null;
+    if (i.pack) {
+      checkPack(i, redraw); // looks only if it has not lately
+      const c = packUpdates.get(i.id) || {};
+      const working = packBusy.has(i.id);
+      packButton = c.update || working
+        ? btn(working ? 'Updating...' : `Update to ${c.update.versionName}`, () => runPackUpdate(i, redraw), 'small green')
+        : btn(c.checking ? 'Checking...' : c.error ? 'Check for Updates' : 'Up to Date', () => { packUpdates.delete(i.id); checkPack(i, redraw); redraw(); }, 'small');
+      packButton.disabled = working || Boolean(c.checking) || (!c.update && !c.error);
+      if (c.error) packButton.title = c.error;
+      packLine = h('div', { class: 'faint row-title' }, `Modpack: ${i.pack.title || 'unnamed'}${i.pack.versionName ? ` ${i.pack.versionName}` : ''}  |  ${SOURCES[i.pack.source] || i.pack.source}`);
+    }
     return h('div', { class: `row ${active ? 'selected' : ''}` },
       h('button', { class: 'slot s48 icon-edit', title: 'Change the icon', onclick: (e) => { e.stopPropagation(); editIcon(i); } },
         instImg(i), h('span', { class: 'pencil' }, '\u270e')),
@@ -1898,10 +2057,12 @@ function viewInstances(v) {
         h('div', { class: 'row-title' }, i.name, h('span', { class: 'gold' }, `  ${instLabel(i)}`),
           h('span', { class: 'faint' }, `  ${i.movable ? 'made by Modion' : i.managed ? 'made by Modion, in Prism Launcher' : 'added from elsewhere'}`)),
         h('div', { class: 'faint path' }, '\u200e' + i.path),
+        packLine,
         h('div', { class: 'faint row-title' }, i.launch ? (i.launch.signIn ? i.launch.label : `${i.launch.play ? 'Play' : 'Open'}: ${i.launch.label}`) : 'Play is not available for this instance with the current launch setting')),
       h('div', { class: 'row-actions' },
         select,
         btn('Open Folder', () => api('instances.openFolder', { id: i.id }).catch(fail), 'small'),
+        packButton,
         Array.isArray(i.leftOut) && i.leftOut.length > 0 && btn(`Left Out (${i.leftOut.length})`, () => leftOutScreen(i.id), 'small gold-btn'),
         btn('Settings', () => instanceSettings(i), 'small'),
         i.managed && btn('Rename', () => renameInstance(i), 'small'),
