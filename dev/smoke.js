@@ -9,7 +9,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const out = path.resolve(process.argv[2] || path.join(os.tmpdir(), 'modion-smoke'));
+// Electron hands its own --flags on to the script too: the folder is the last argument that is not one.
+const out = path.resolve(process.argv.slice(2).filter((a) => !a.startsWith('--')).pop() || path.join(os.tmpdir(), 'modion-smoke'));
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'modion-smoke-'));
 const instanceDir = path.join(work, 'instance');
 const mods = path.join(instanceDir, 'mods');
@@ -1526,7 +1527,7 @@ require('../main.js').ready.then(async (win) => {
       return { tmp, filename: o.expect.filename };
     };
     try {
-      await js(`updateCache.clear(); doWebInstall({ source: 'curseforge', projectId: 'M', versionId: 'm1', type: 'mod', title: 'Website Mod', gameVersion: '1.21.1', loader: 'fabric' })`);
+      await js(`updateCache.clear(); doWebInstall({ source: 'curseforge', projectId: 'M', versionId: 'm1', type: 'mod', title: 'Website Mod', gameVersion: '1.21.1', loader: 'fabric' }); 0`); // not awaited: it waits on the question below
       // The mod itself is in; its downloadable dependency came on its own; the other one is asked about.
       await waitFor(`!document.querySelector('#overlay').hidden && /More files only on the website/.test(document.querySelector('#overlay').textContent)`, 'the question about the website-only dependency', 60000);
       const folder = () => fs.readdirSync(path.join(inst.path, 'mods')).sort().join();
@@ -1541,7 +1542,7 @@ require('../main.js').ready.then(async (win) => {
       // Declining leaves the rest alone and says so.
       fs.rmSync(path.join(inst.path, 'mods', 'dependency-e.jar'));
       opened.length = 0;
-      await js(`S.cfg.installed = {}; doWebInstall({ source: 'curseforge', projectId: 'M', versionId: 'm1', type: 'mod', title: 'Website Mod', gameVersion: '1.21.1', loader: 'fabric' })`);
+      await js(`S.cfg.installed = {}; doWebInstall({ source: 'curseforge', projectId: 'M', versionId: 'm1', type: 'mod', title: 'Website Mod', gameVersion: '1.21.1', loader: 'fabric' }); 0`); // not awaited: it waits on the question below
       await waitFor(`!document.querySelector('#overlay').hidden && /More files only on the website/.test(document.querySelector('#overlay').textContent)`, 'the question again', 60000);
       await pressIn('Cancel');
       await waitFor(`!busy.size && [...document.querySelectorAll('#toasts .toast')].some(t => /may not start without/.test(t.textContent))`, 'the warning');
