@@ -21,6 +21,7 @@ const clientId = () => store.config.msClientId || CLIENT_ID;
 const game = require('./src/game');
 const modpack = require('./src/modpack');
 const webinstall = require('./src/webinstall');
+const packupdate = require('./src/packupdate');
 
 const INDEX = path.join(__dirname, 'ui', 'index.html');
 const sources = { modrinth, curseforge };
@@ -211,6 +212,7 @@ async function makeInstance(spec) {
 function adopt(made, spec) {
   offered.add(made.path);
   const inst = { id: made.id || crypto.randomUUID(), path: made.path, name: made.name, gameVersion: spec.gameVersion, loader: spec.loader, managed: true, home: made.home };
+  if (spec.loader && spec.loaderVersion) inst.loaderVersion = spec.loaderVersion;
   store.config.instances.push(inst);
   store.config.activeInstanceId = inst.id;
   store.saveConfig();
@@ -266,6 +268,7 @@ function indexLibraries() {
           managed: true,
           home: f.home,
         };
+        if (inst.loader && typeof f.meta.loaderVersion === 'string' && f.meta.loaderVersion) inst.loaderVersion = text(f.meta.loaderVersion, 80);
         list.push(inst);
         changed = true;
       }
@@ -327,12 +330,15 @@ function migrateData() {
 
 // Makes a new instance from a modpack file: reads what it needs, creates the instance,
 // downloads the pack's files into it and copies the pack's own folders over.
-async function importPack(file, fallbackName) {
+// `origin` says which project and file on Modrinth or CurseForge the pack was downloaded as,
+// which is what lets the instance be updated later; a pack picked from the disk has none.
+async function importPack(file, fallbackName, origin) {
   const pack = modpack.inspect(file);
   let made = null;
   const job = { id: crypto.randomUUID(), title: pack.name, filename: pack.name, saved: true };
   try {
-    const spec = { name: text(pack.name, 80) || fallbackName || '', gameVersion: text(pack.gameVersion, 32), loader: oneOf(pack.loader, LOADERS, ''), loaderVersion: text(pack.loaderVersion, 40) };
+    const spec = { name: text(pack.name, 80) || fallbackName || '', gameVersion: text(pack.gameVersion, 32), loader: oneOf(pack.loader, LOADERS, ''), loaderVersion: '' };
+    spec.loaderVersion = await knownBuild(spec.loader, spec.gameVersion, text(pack.loaderVersion, 80));
     // Checked before any folder is made, so a pack that cannot be fetched leaves nothing behind.
     if (pack.kind === 'curseforge' && pack.files.length && !curseforge.hasKey()) {
       throw new ApiError('Importing a CurseForge modpack needs your CurseForge API key. Add it in Settings first.', 'NO_CF_KEY');
@@ -340,12 +346,20 @@ async function importPack(file, fallbackName) {
     made = await makeInstance(spec);
     const { items, skipped, blocked } = await modpack.downloads(pack, made.path, curseforge);
     await game.fetchAll(items, (received, total) => emit({ ...job, state: 'progress', received, total }));
-    const copied = await modpack.unpackOverrides(pack, made.path);
+    const { count: copied, hashes: overrideHashes } = await modpack.unpackOverrides(pack, made.path);
     const inst = adopt(made, spec);
     // Remembered with the instance, so they can be fetched from the website now or later.
     inst.fromPack = true; // what is installed into it later counts as added by the person
     if (blocked.length) inst.leftOut = blocked;
+    if (origin) inst.pack = { ...origin, gameVersion: pack.gameVersion, loader: pack.loader };
     store.saveConfig();
+    // What the pack brought, so that later the person's own files can be told from it.
+    try {
+      const files = {};
+      for (const it of items) if (it.rel) files[it.rel] = it.sig;
+      for (const b of blocked) if (b.rel) files[b.rel] = `cf:${b.fileId}`;
+      store.savePackState(inst.id, { files, overrides: overrideHashes });
+    } catch (e) { console.error('Could not record the pack\'s files:', e.message); } // only updating is lost
     return { config: publicConfig(), id: inst.id, name: inst.name, files: items.length, copied, skipped, leftOut: blocked.length };
   } catch (e) {
     if (made) fs.rmSync(made.home, { recursive: true, force: true }); // only the folder created just above
@@ -358,7 +372,7 @@ async function importPack(file, fallbackName) {
 
 function forget(idValue, { keepRecords } = {}) {
   store.config.instances = store.config.instances.filter((i) => i.id !== idValue);
-  if (!keepRecords) { delete store.manifest[idValue]; dropIcon(idValue); }
+  if (!keepRecords) { delete store.manifest[idValue]; dropIcon(idValue); store.dropPackState(idValue); }
   if (!store.active()) store.config.activeInstanceId = store.config.instances[0] ? store.config.instances[0].id : null;
   store.saveConfig();
   store.saveManifest();
@@ -376,6 +390,209 @@ const builtinKey = (() => {
   try { return fs.readFileSync(path.join(__dirname, 'curseforge.key'), 'utf8').trim().slice(0, 200); } catch { return ''; }
 })();
 const fallbackKey = () => builtinKey || process.env.CURSEFORGE_API_KEY || '';
+
+// The log of an instance that should be shown: { file, size, mtime } and, for a compressed
+// one, its unpacked `bytes` (with `size` the unpacked length). null when it has none at all.
+let unpacked = null; // the last compressed log read, so it is not unpacked again every second
+async function newestLog(gameDir) {
+  let pick = null;
+  const consider = async (file) => {
+    try {
+      const st = await fs.promises.stat(file);
+      if (st.isFile() && (!pick || st.mtimeMs > pick.mtime)) pick = { file, size: st.size, mtime: st.mtimeMs };
+    } catch {}
+  };
+  for (const file of [game.outputLog(gameDir), path.join(gameDir, 'logs', 'latest.log')]) await consider(file);
+  if (!pick) {
+    let names = [];
+    try { names = await fs.promises.readdir(path.join(gameDir, 'logs')); } catch {}
+    for (const name of names) if (/\.log(\.gz)?$/i.test(name)) await consider(path.join(gameDir, 'logs', name));
+  }
+  if (pick && /\.gz$/i.test(pick.file)) {
+    if (!unpacked || unpacked.file !== pick.file || unpacked.mtime !== pick.mtime) {
+      let bytes;
+      try {
+        bytes = require('zlib').gunzipSync(await fs.promises.readFile(pick.file), { maxOutputLength: 64 * 2 ** 20 });
+      } catch { bytes = Buffer.from('(This log could not be unpacked.)\n'); }
+      unpacked = { file: pick.file, mtime: pick.mtime, bytes };
+    }
+    pick = { ...pick, size: unpacked.bytes.length, bytes: unpacked.bytes };
+  }
+  return pick;
+}
+
+// Where a downloaded pack came from, as the instance made from it remembers it.
+function originOf(src, projectId, v, title, icon) {
+  return {
+    source: src, projectId: String(projectId), versionId: String(v.id), versionName: String(v.versionNumber || v.name || '').slice(0, 200),
+    title: text(title, 200) || v.name, icon: text(icon, 2000) || null, channel: v.channel,
+  };
+}
+
+// For a modpack file its author only offers on the CurseForge website: shows that file's
+// page and waits for the person to download it there into `dir`.
+// -> { v: the file, shown: { title, icon }, got: { tmp, ... } }
+async function packFromWebsite(a, projectId, versionId, dir) {
+  const v = await curseforge.getVersion(projectId, versionId);
+  if (!v.expected) throw new ApiError('CurseForge did not say which file this is.', 'BAD_REPLY');
+  const about = await curseforge.brief(projectId);
+  const page = about.url;
+  // A pack's left-out file comes with the file's name only: the project's own name and icon are used.
+  const shown = a.icon ? { title: text(a.title, 200), icon: text(a.icon, 2000) } : { title: about.title || text(a.title, 200), icon: about.icon || null };
+  if (!page) throw new ApiError('CurseForge did not give a page for this project.', 'BAD_REPLY');
+  const job = { id: crypto.randomUUID(), title: text(a.title, 200) || v.name, filename: v.expected.filename };
+  let got;
+  try {
+    got = await webinstall.open({
+      parent: liveWindow(),
+      url: `${page.replace(/\/+$/, '')}/files/${encodeURIComponent(v.id)}`,
+      title: `Download ${v.expected.filename} from CurseForge`,
+      siteHosts: ['curseforge.com'],
+      downloadHosts: ['forgecdn.net', 'curseforge.com'],
+      expect: v.expected,
+      destDir: dir,
+      onProgress: (received, total) => emit({ ...job, state: 'progress', received, total }),
+    });
+  } finally {
+    emit({ ...job, state: 'done', saved: true });
+  }
+  return { v, shown, got };
+}
+
+// Moves an instance to another game version, loader, or build of the loader. For an
+// instance Modion keeps (or a Prism one it made) the files that say what to start are
+// rewritten too; for one that belongs to another launcher only Modion's own record changes,
+// which decides what files it offers. Everything is checked before anything is changed.
+async function applyGame(inst, want) {
+  const gameVersion = text(want.gameVersion, 32), loader = oneOf(want.loader, LOADERS, '');
+  const loaderVersion = loader ? text(want.loaderVersion, 80) : '';
+  if (game.inUse(inst.path)) throw new ApiError(`"${inst.name}" is running. Close the game before changing its version.`, 'BUSY');
+  const own = Boolean(inst.managed && libraries.isOwn(inst.home));
+  const prism = Boolean(inst.managed && !own && inst.home && launcher.prismRoots().includes(path.dirname(inst.home)));
+  if (own || prism) {
+    if (!gameVersion) throw new ApiError('Pick a game version.', 'BAD_REQUEST');
+    if (own) {
+      if (!game.supports({ gameVersion, loader })) throw new ApiError('Modion cannot start that kind of instance itself.', 'UNSUPPORTED');
+      await game.versionJson(gameVersion); // fails for a version Mojang does not have
+    }
+    if (loader) {
+      const builds = await game.loaderBuilds(loader, gameVersion); // fails if the loader has nothing for this version
+      if (loaderVersion && !builds.some((b) => b.version === loaderVersion)) {
+        throw new ApiError(`${LOADER_NAMES[loader]} ${loaderVersion} does not exist for Minecraft ${gameVersion}.`, 'NO_LOADER_VERSION');
+      }
+    }
+    if (own) {
+      try { libraries.writeMeta(inst.home, { ...(libraries.readMeta(inst.home) || {}), gameVersion, loader, loaderVersion: loaderVersion || undefined }); } catch (e) {
+        throw new ApiError(`Could not write the instance's settings: ${e.code || e.message}.`, 'FS');
+      }
+    } else {
+      await launcher.setComponents(inst.home, gameVersion, loader, loaderVersion);
+    }
+  }
+  inst.gameVersion = gameVersion;
+  inst.loader = loader;
+  if (loaderVersion && (own || prism)) inst.loaderVersion = loaderVersion; else delete inst.loaderVersion;
+}
+
+const LOADER_NAMES = { fabric: 'Fabric', forge: 'Forge', neoforge: 'NeoForge', quilt: 'Quilt' };
+
+// A loader build named by a modpack, if it is one Modion can start; '' otherwise (Modion's usual pick is used then).
+async function knownBuild(loader, gameVersion, loaderVersion) {
+  if (!loader || !gameVersion || !loaderVersion) return '';
+  try { return (await game.loaderBuilds(loader, gameVersion)).some((b) => b.version === loaderVersion) ? loaderVersion : ''; } catch { return ''; }
+}
+
+// Pack updates in progress, so one instance is never updated twice at once.
+const updating = new Set();
+
+
+// Brings an instance that was downloaded as a modpack up to the pack's newest file.
+// Nothing in the instance changes until everything the update needs has been fetched, and
+// what the person did since stays: mods they added or updated, files they deleted, config
+// files they edited. See packupdate.js for the rules.
+async function updatePack(inst, tmp) {
+  const pk = inst.pack, src = source(pk.source);
+  if (pk.source === 'curseforge' && !curseforge.hasKey()) throw new ApiError('Updating a CurseForge modpack needs your CurseForge API key. Add it in Settings first.', 'NO_CF_KEY');
+  const v = await packupdate.newest(src, pk);
+  if (!v) throw new ApiError(`"${pk.title || inst.name}" is already up to date.`, 'UP_TO_DATE');
+  const title = pk.title || inst.name;
+
+  // The new pack file: downloaded, or (website-only) fetched by the person from its page.
+  let file;
+  if (v.file) {
+    const job = { id: crypto.randomUUID(), title, filename: v.file.filename, saved: true };
+    try {
+      file = path.join(tmp, await content.download(v.file, tmp, (received, total) => emit({ ...job, state: 'progress', received, total })));
+    } finally {
+      emit({ ...job, state: 'done', saved: true });
+    }
+  } else {
+    file = (await packFromWebsite({ title, icon: pk.icon || '' }, pk.projectId, String(v.id), tmp)).got.tmp;
+  }
+
+  const pack = modpack.inspect(file);
+  const staging = path.join(inst.path, `.modion-update-${crypto.randomBytes(4).toString('hex')}`);
+  try {
+    const { items, skipped, blocked } = await modpack.downloads(pack, inst.path, curseforge);
+    const state = store.packState(inst.id) || { files: {}, overrides: {} };
+    const wanted = [...items, ...blocked.map((b) => ({ rel: b.rel, sig: `cf:${b.fileId}`, site: 'curseforge', projectId: b.projectId }))].filter((w) => w.rel);
+    const entries = store.entries(inst.id);
+    const there = (rel) => fs.existsSync(path.join(inst.path, rel)) || fs.existsSync(`${path.join(inst.path, rel)}.disabled`);
+    const wantsModrinth = Object.values(entries).some((e) => (e.added || e.updated) && (e.source === 'modrinth' || (e.also && e.also.modrinth)));
+    const mine = packupdate.mineRels(entries, there, await packupdate.projectsOf(wanted, sources, wantsModrinth));
+    const plan = packupdate.plan(state, wanted, mine, there);
+
+    // Fetched aside first: a download that fails leaves the instance exactly as it was.
+    const fetch = plan.fetch.filter((w) => w.url).map((w) => ({ ...w, dir: path.join(staging, path.dirname(w.rel)) }));
+    const job = { id: crypto.randomUUID(), title, filename: `${title} ${v.versionNumber || v.name}`, saved: true };
+    try {
+      await game.fetchAll(fetch, (received, total) => emit({ ...job, state: 'progress', received, total }));
+    } finally {
+      emit({ ...job, state: 'done', saved: true });
+    }
+
+    // The pack may be for another game version or loader build than the instance.
+    const wantGame = { gameVersion: text(pack.gameVersion, 32), loader: oneOf(pack.loader, LOADERS, ''), loaderVersion: '' };
+    wantGame.loaderVersion = await knownBuild(wantGame.loader, wantGame.gameVersion, text(pack.loaderVersion, 80));
+    const movedGame = wantGame.gameVersion !== inst.gameVersion || wantGame.loader !== inst.loader || (wantGame.loaderVersion && wantGame.loaderVersion !== inst.loaderVersion);
+    if (movedGame) await applyGame(inst, wantGame);
+
+    const done = await content.exclusive(async () => {
+      const swapped = await packupdate.swap({ gameDir: inst.path, staging, fetch, stale: plan.stale, trash: (p) => shell.trashItem(p), entries });
+      let keptConfigs = 0;
+      const { hashes } = await modpack.unpackOverrides(pack, inst.path, async (f, bytes, hash) => {
+        if (state.overrides[f.rel] === hash) return true; // unchanged in the pack: nothing to read
+        let now = null;
+        try { now = modpack.sha1Hex(await fs.promises.readFile(f.full)); } catch {}
+        const act = packupdate.overrideAction(state.overrides[f.rel], hash, now);
+        if (act === 'mine') keptConfigs++;
+        return act !== 'write';
+      });
+      return { ...swapped, keptConfigs, hashes };
+    });
+
+    const files = {};
+    for (const w of wanted) files[w.rel] = w.sig;
+    store.savePackState(inst.id, { files, overrides: done.hashes });
+    // Website-only files still to be fetched: the new or changed ones, and ones still waiting from before.
+    const waiting = Array.isArray(inst.leftOut) ? inst.leftOut : [];
+    const left = blocked.filter((b) => !mine.has(b.rel) && (plan.fetch.some((w) => w.rel === b.rel) || waiting.some((f) => f.fileId === b.fileId)));
+    if (left.length) inst.leftOut = left; else delete inst.leftOut;
+    inst.pack = { ...pk, versionId: String(v.id), versionName: String(v.versionNumber || v.name || '').slice(0, 200), channel: v.channel, gameVersion: text(pack.gameVersion, 32), loader: oneOf(pack.loader, LOADERS, '') };
+    store.saveConfig();
+    store.saveManifest();
+    refreshInstalled();
+    for (const rel of done.stuck) skipped.push({ title: path.basename(rel), reason: 'an old file of the pack could not be moved to the trash and is still in the instance' });
+    return {
+      config: publicConfig(), id: inst.id, name: inst.name, from: pk.versionName, to: inst.pack.versionName,
+      added: done.added, removed: done.removed, keptMods: plan.mine.length, keptConfigs: done.keptConfigs,
+      skipped, leftOut: left.length, changedGame: Boolean(movedGame),
+    };
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true }); // only the folder made just above
+    pack.zip.close();
+  }
+}
 
 const methods = {
   'config.get': () => publicConfig(),
@@ -455,30 +672,30 @@ const methods = {
 
   // The newest part of an instance's game log, for the Log tab. The page calls this about
   // once a second with where it got to (`source` and `offset`) and receives what is new.
-  // Two files can hold the log: the output of a game Modion started itself, and the
+  // Two files can hold the live log: the output of a game Modion started itself, and the
   // latest.log that Minecraft writes whichever launcher started it; the fresher one is used.
+  // An instance whose game has not run lately may have neither: then the newest log left in
+  // its logs folder (Minecraft packs older ones into .log.gz files) is shown instead.
   'log.read': async (a) => {
     const inst = store.instance(a.id);
     if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
-    let pick = null;
-    for (const file of [game.outputLog(inst.path), path.join(inst.path, 'logs', 'latest.log')]) {
-      try {
-        const st = await fs.promises.stat(file);
-        if (st.isFile() && (!pick || st.mtimeMs > pick.mtime)) pick = { file, size: st.size, mtime: st.mtimeMs };
-      } catch {}
-    }
+    const pick = await newestLog(inst.path);
     if (!pick) return { source: '', offset: 0, text: '', reset: Boolean(a.source) };
     const TAIL = 200000, CHUNK = 262144;
     const same = a.source === pick.file && Number.isInteger(a.offset) && a.offset >= 0 && a.offset <= pick.size;
     let offset = same ? a.offset : Math.max(0, pick.size - TAIL); // a new or restarted log is shown from near its end
-    const handle = await fs.promises.open(pick.file, 'r');
     let data;
-    try {
-      const buf = Buffer.alloc(Math.min(CHUNK, pick.size - offset));
-      const { bytesRead } = await handle.read(buf, 0, buf.length, offset);
-      data = buf.subarray(0, bytesRead);
-    } finally {
-      await handle.close();
+    if (pick.bytes) {
+      data = pick.bytes.subarray(offset, offset + Math.min(CHUNK, pick.size - offset));
+    } else {
+      const handle = await fs.promises.open(pick.file, 'r');
+      try {
+        const buf = Buffer.alloc(Math.min(CHUNK, pick.size - offset));
+        const { bytesRead } = await handle.read(buf, 0, buf.length, offset);
+        data = buf.subarray(0, bytesRead);
+      } finally {
+        await handle.close();
+      }
     }
     // Hand over whole lines only, so a line (or a multi-byte character) is never cut in half.
     if (!same && offset > 0) {
@@ -487,7 +704,7 @@ const methods = {
     }
     const last = data.lastIndexOf(10);
     if (last >= 0) data = data.subarray(0, last + 1);
-    else if (data.length < CHUNK) data = data.subarray(0, 0); // an unfinished line: wait for the rest
+    else if (data.length < CHUNK && !pick.bytes) data = data.subarray(0, 0); // an unfinished line: wait for the rest
     return { source: pick.file, offset: offset + data.length, text: data.toString('utf8'), reset: !same };
   },
 
@@ -564,8 +781,18 @@ const methods = {
       if (!inst.leftOut.length) delete inst.leftOut;
       store.saveConfig();
     }
+    // What the file needs comes along, as it does for a file Modion downloads itself. (The
+    // files a pack left out are part of the pack, whose own list already has what they need.)
+    const needs = { installed: [], skipped: [], blocked: [] };
+    if (!a.instanceId && type === 'mod') {
+      try {
+        Object.assign(needs, await content.install(ctx(), { source: 'curseforge', instanceId: inst.id, projectId, versionId: String(v.id), type, depsOnly: true, gameVersion: inst.gameVersion || '', loader: inst.loader || '' }, emit));
+      } catch (e) {
+        needs.skipped.push({ title: shown.title || v.name, reason: `what it needs could not be checked: ${e.message}` });
+      }
+    }
     refreshInstalled();
-    return { installed_ids: content.installedIds(store), config: publicConfig() };
+    return { installed_ids: content.installedIds(store), config: publicConfig(), installed: needs.installed, skipped: needs.skipped, blocked: needs.blocked };
   },
 
   // Drops an instance's list of left-out files (the person does not want them).
@@ -581,32 +808,10 @@ const methods = {
   // the person to download the pack there, then make the instance from it.
   'modpack.installViaWebsite': async (a) => {
     const projectId = id(a.projectId, 'project');
-    const v = await curseforge.getVersion(projectId, id(a.versionId, 'file'));
-    if (!v.expected) throw new ApiError('CurseForge did not say which file this is.', 'BAD_REPLY');
-    const about = await curseforge.brief(projectId);
-    const page = about.url;
-    // A pack's left-out file comes with the file's name only: the project's own name and icon are used.
-    const shown = a.icon ? { title: text(a.title, 200), icon: text(a.icon, 2000) } : { title: about.title || text(a.title, 200), icon: about.icon || null };
-    if (!page) throw new ApiError('CurseForge did not give a page for this project.', 'BAD_REPLY');
     const dir = await fs.promises.mkdtemp(path.join(require('os').tmpdir(), 'modion-pack-'));
-    const job = { id: crypto.randomUUID(), title: text(a.title, 200) || v.name, filename: v.expected.filename };
     try {
-      let got;
-      try {
-        got = await webinstall.open({
-          parent: liveWindow(),
-          url: `${page.replace(/\/+$/, '')}/files/${encodeURIComponent(v.id)}`,
-          title: `Download ${v.expected.filename} from CurseForge`,
-          siteHosts: ['curseforge.com'],
-          downloadHosts: ['forgecdn.net', 'curseforge.com'],
-          expect: v.expected,
-          destDir: dir,
-          onProgress: (received, total) => emit({ ...job, state: 'progress', received, total }),
-        });
-      } finally {
-        emit({ ...job, state: 'done', saved: true });
-      }
-      return await importPack(got.tmp, text(a.title, 80));
+      const { v, shown, got } = await packFromWebsite(a, projectId, id(a.versionId, 'file'), dir);
+      return await importPack(got.tmp, text(a.title, 80), originOf('curseforge', projectId, v, text(a.title, 200), shown.icon));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true }); // only the temporary folder made just above
     }
@@ -707,6 +912,7 @@ const methods = {
       ? await src.getVersion(projectId, id(a.versionId, 'file'))
       : await src.latest(projectId, { type: 'modpack', gameVersion: text(a.gameVersion, 32), loader: oneOf(a.loader, LOADERS, '') });
     if (!v) throw new ApiError('This modpack has no file for the chosen game version and loader.', 'NO_VERSION');
+    if (v.projectId && String(v.projectId) !== projectId) throw new ApiError('That file belongs to another project.', 'BAD_REQUEST');
     if (!v.file) {
       // The page carries on with the website download, the same way as for a single mod.
       throw new ApiError('The author only offers this modpack on the website.', 'BLOCKED', undefined, { versionId: v.id });
@@ -719,9 +925,40 @@ const methods = {
       } finally {
         emit({ ...job, state: 'done', saved: true });
       }
-      return await importPack(path.join(dir, fs.readdirSync(dir)[0]), text(a.title, 80));
+      return await importPack(path.join(dir, fs.readdirSync(dir)[0]), text(a.title, 80), originOf(a.source, projectId, v, a.title, a.icon));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true }); // only the temporary folder made just above
+    }
+  },
+
+  // Is there a newer file of the modpack this instance was downloaded as?
+  // -> { current: { versionName }, update: { versionId, versionName, date, website } | null }
+  'modpack.checkUpdate': async (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    if (!inst.pack) throw new ApiError('This instance was not downloaded as a modpack from Modrinth or CurseForge, so there is nothing to update it from.', 'NO_PACK');
+    if (inst.pack.source === 'curseforge' && !curseforge.hasKey()) throw new ApiError('Checking a CurseForge modpack needs your CurseForge API key. Add it in Settings first.', 'NO_CF_KEY');
+    const v = await packupdate.newest(source(inst.pack.source), inst.pack);
+    return {
+      current: { versionName: inst.pack.versionName },
+      update: v ? { versionId: String(v.id), versionName: String(v.versionNumber || v.name || ''), date: v.date, channel: v.channel, website: !v.file } : null,
+    };
+  },
+
+  'modpack.update': async (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    if (!inst.pack) throw new ApiError('This instance was not downloaded as a modpack from Modrinth or CurseForge, so there is nothing to update it from.', 'NO_PACK');
+    if (!instances.isDir(inst.path)) throw new ApiError(`The folder for "${inst.name}" no longer exists: ${inst.path}`, 'NO_FOLDER');
+    if (game.inUse(inst.path)) throw new ApiError(`"${inst.name}" is running. Close the game before updating it.`, 'BUSY');
+    if (updating.has(inst.id)) throw new ApiError(`"${inst.name}" is already being updated.`, 'BUSY');
+    updating.add(inst.id);
+    const tmp = await fs.promises.mkdtemp(path.join(require('os').tmpdir(), 'modion-pack-'));
+    try {
+      return await updatePack(inst, tmp);
+    } finally {
+      updating.delete(inst.id);
+      fs.rmSync(tmp, { recursive: true, force: true }); // only the temporary folder made just above
     }
   },
 
@@ -992,11 +1229,32 @@ const methods = {
     return true;
   },
 
-  'instances.update': (a) => {
+  'instances.update': async (a) => {
     const inst = store.instance(a.id);
     if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
-    Object.assign(inst, cleanInstance(a, { id: inst.id, path: inst.path }));
+    const next = cleanInstance(a, { id: inst.id, path: inst.path });
+    // The same build of the loader stays if neither the game version nor the loader changed.
+    if (next.gameVersion !== inst.gameVersion || next.loader !== inst.loader) await applyGame(inst, next);
+    inst.name = next.name;
     store.saveConfig();
+    return publicConfig();
+  },
+
+  // The builds of a loader there are for a game version, newest first, for the settings screen.
+  'loader.versions': async (a) => {
+    const loader = oneOf(a.loader, LOADERS.slice(1), '');
+    const gameVersion = text(a.gameVersion, 32);
+    if (!loader || !gameVersion) throw new ApiError('Pick a game version and a loader first.', 'BAD_REQUEST');
+    return game.loaderBuilds(loader, gameVersion);
+  },
+
+  // Changes an instance's game version, mod loader and the build of the loader.
+  'instances.setGame': async (a) => {
+    const inst = store.instance(a.id);
+    if (!inst) throw new ApiError('That instance is no longer in the list.', 'GONE');
+    await applyGame(inst, a);
+    store.saveConfig();
+    refreshInstalled();
     return publicConfig();
   },
 

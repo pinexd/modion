@@ -6,6 +6,25 @@ const fs = require('fs');
 const path = require('path');
 
 const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+
+// Where a downloaded modpack came from, so it can be updated: the project and the file
+// the instance was last made (or updated) from.
+function cleanPack(p) {
+  if (!isObject(p) || !['modrinth', 'curseforge'].includes(p.source) || !str(p.projectId, 80) || !str(p.versionId, 80)) return null;
+  return {
+    source: p.source,
+    projectId: str(p.projectId, 80),
+    versionId: str(p.versionId, 80),
+    versionName: str(p.versionName, 200),
+    title: str(p.title, 200),
+    icon: typeof p.icon === 'string' && p.icon ? p.icon.slice(0, 2000) : null,
+    channel: ['release', 'beta', 'alpha'].includes(p.channel) ? p.channel : 'release',
+    // What the pack asked for when it was installed; updates are looked for in the same line.
+    gameVersion: str(p.gameVersion, 32),
+    loader: str(p.loader, 20),
+  };
+}
 
 class Store {
   constructor(dir, defaultLibrary) {
@@ -24,6 +43,9 @@ class Store {
           name: String(i.name || path.basename(i.path)),
           gameVersion: typeof i.gameVersion === 'string' ? i.gameVersion : '',
           loader: typeof i.loader === 'string' ? i.loader : '',
+          // The exact build of the loader, where it was chosen (or a modpack named one); '' = Modion picks.
+          ...(typeof i.loaderVersion === 'string' && i.loaderVersion && i.loader ? { loaderVersion: i.loaderVersion.slice(0, 80) } : {}),
+          ...(cleanPack(i.pack) ? { pack: cleanPack(i.pack) } : {}),
           // Set on instances Modion created or imported: `home` is the folder it may rename and delete.
           ...(i.managed === true && typeof i.home === 'string' && i.home ? { managed: true, home: i.home } : {}),
           ...(i.fromPack === true ? { fromPack: true } : {}), // made from a modpack
@@ -101,6 +123,29 @@ class Store {
 
   saveConfig() { this.write('config.json', this.config); }
   saveManifest() { this.write('manifest.json', this.manifest); }
+
+  // What a modpack instance got from its pack, kept apart from config.json because it can
+  // be long: { files: { "mods/a.jar": signature }, overrides: { "config/b.toml": sha1 } }.
+  // It is what lets a later update tell the pack's own files from the person's.
+  packFile(id) { return `pack-${String(id).replace(/[^\w-]/g, '')}.json`; }
+  packState(id) {
+    if (!this.packs) this.packs = new Map();
+    if (!this.packs.has(id)) {
+      const saved = this.read(this.packFile(id));
+      const clean = (o) => Object.fromEntries(Object.entries(isObject(o) ? o : {}).filter(([k, v]) => typeof v === 'string' && k));
+      this.packs.set(id, isObject(saved) ? { files: clean(saved.files), overrides: clean(saved.overrides) } : null);
+    }
+    return this.packs.get(id);
+  }
+  savePackState(id, state) {
+    if (!this.packs) this.packs = new Map();
+    this.write(this.packFile(id), state);
+    this.packs.set(id, state);
+  }
+  dropPackState(id) {
+    if (this.packs) this.packs.delete(id);
+    try { fs.rmSync(path.join(this.dir, this.packFile(id)), { force: true }); } catch {}
+  }
 
   instance(id) { return this.config.instances.find((i) => i.id === id) || null; }
   active() { return this.instance(this.config.activeInstanceId); }

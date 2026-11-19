@@ -32,12 +32,34 @@ function pickSource(sources, name) {
   return sources[name];
 }
 
-function activeInstance(store) {
-  const inst = store.active();
-  if (!inst) throw new ApiError('Pick an instance first.', 'NO_INSTANCE');
+function activeInstance(store, id) {
+  const inst = id ? store.instance(id) : store.active();
+  if (!inst) throw new ApiError(id ? 'That instance is no longer in the list.' : 'Pick an instance first.', id ? 'GONE' : 'NO_INSTANCE');
   // Never recreate a game folder that a launcher has since deleted.
   if (!isDir(inst.path)) throw new ApiError(`The folder for "${inst.name}" no longer exists: ${inst.path}`, 'NO_FOLDER');
   return inst;
+}
+
+// Was this file part of the modpack the instance was made from? true / false, or null when
+// that is not known (the instance has no record of its pack's files).
+function inPack(store, inst, key) {
+  const state = store.packState(inst.id);
+  if (!state) return null;
+  return Object.hasOwn(state.files, key) || Object.hasOwn(state.overrides, key);
+}
+
+// What an install of `key` means in an instance made from a modpack: `added` for what the
+// person put in themselves, `updated` for a mod of the pack they moved to another file.
+// `prior` is the entry being replaced, if any. An update keeps the answer it had.
+function provenance(store, inst, key, prior, changed) {
+  if (!inst.fromPack) return {};
+  const was = prior && prior[1];
+  if (was && was.added) return { added: true };
+  if (was && was.updated) return { updated: true };
+  const known = inPack(store, inst, prior ? prior[0] : key);
+  if (!prior) return known === true ? {} : { added: true };
+  if (known === false) return { added: true };
+  return changed ? { updated: true } : {};
 }
 
 function fsProblem(e, what) {
@@ -314,7 +336,7 @@ function install(ctx, req, emit) {
 
 async function installNow(ctx, req, emit) {
   const { store, sources, trash } = ctx;
-  const inst = activeInstance(store);
+  const inst = activeInstance(store, req.instanceId);
   const api = pickSource(sources, req.source);
   const folder = folderFor(req.type);
   const dir = path.join(inst.path, folder);
@@ -322,7 +344,8 @@ async function installNow(ctx, req, emit) {
   const tracked = () => (store.instance(inst.id) ? store.entries(inst.id) : null);
   const want = { type: req.type, gameVersion: req.gameVersion || '', loader: req.loader || '' };
   const seen = new Set();
-  const result = { installed: [], skipped: [] };
+  // `blocked`: required files of other projects that their authors only offer on the website.
+  const result = { installed: [], skipped: [], blocked: [] };
 
   // Learn what is already in the folder (including files other launchers put there), so an
   // existing copy of a project is replaced rather than joined by a second one.
@@ -356,7 +379,7 @@ async function installNow(ctx, req, emit) {
     }
     if (!v.file) {
       throw new ApiError(`${meta.title}: the author only allows downloads from the CurseForge website.`, 'BLOCKED', undefined,
-        isDep ? undefined : { projectId, versionId: v.id });
+        { projectId, versionId: v.id, title: meta.title, icon: meta.icon || null });
     }
 
     const base = { id: crypto.randomUUID(), title: meta.title, filename: v.file.filename };
@@ -388,13 +411,18 @@ async function installNow(ctx, req, emit) {
         source: req.source, projectId, versionId: v.id, versionName: v.versionNumber || v.name,
         title: meta.title, icon: meta.icon || null, type: req.type,
         ...(st ? { size: st.size, mtime: st.mtimeMs } : {}),
-        // In an instance made from a modpack: was this put in afterwards? An update keeps the answer.
-        ...((prior ? prior[1].added : inst.fromPack) ? { added: true } : {}),
+        // In an instance made from a modpack: put in afterwards, or moved to another file? An update keeps the answer.
+        ...provenance(store, inst, key, prior, prior && String(prior[1].versionId) !== String(v.id)),
       };
       store.saveManifest();
     }
     result.installed.push({ title: meta.title, filename, dependency: isDep });
 
+    await deps(v, opts);
+  }
+
+  // What the file needs: its required dependencies, installed first-come (once each).
+  async function deps(v, opts) {
     if (req.type !== 'mod') return;
     // Dependencies must fit the file that needs them. Normally that is the instance's own
     // version and loader; if the user hand-picked a file for something else, follow the file.
@@ -413,11 +441,20 @@ async function installNow(ctx, req, emit) {
         if (depMeta) name = depMeta.title;
         await one(pid, dep.versionId, depMeta, true, depOpts);
       } catch (e) {
-        result.skipped.push({ title: name, reason: e.message });
+        // A dependency that can only be had from the website is handed back to be fetched there.
+        if (e.code === 'BLOCKED' && e.detail && e.detail.versionId) result.blocked.push({ ...e.detail, source: req.source });
+        else result.skipped.push({ title: name, reason: e.message });
       }
     }
   }
 
+  // A file that was fetched from the website by hand is already in place; what it needs is not.
+  if (req.depsOnly) {
+    if (!req.versionId) throw new ApiError('No file to look up the dependencies of.', 'BAD_REQUEST');
+    seen.add(String(req.projectId));
+    await deps(await api.getVersion(req.projectId, req.versionId), want);
+    return result;
+  }
   await one(req.projectId, req.versionId || null, req.title ? { title: String(req.title), icon: req.icon || null } : null, false, want);
   return result;
 }
@@ -456,7 +493,8 @@ function adoptFile({ store, trash }, inst, req, tmp, v) {
       source: req.source, projectId, versionId: v.id, versionName: v.versionNumber || v.name,
       title: req.title || v.name, icon: req.icon || null, type: req.type,
       ...(st ? { size: st.size, mtime: st.mtimeMs } : {}),
-      ...((prior ? prior[1].added : req.added) ? { added: true } : {}),
+      // `req.added` is the caller's own answer: true for what the person added, false for a file of the pack.
+      ...(req.added === true ? { added: true } : req.added === false && !prior ? {} : provenance(store, inst, key, prior, prior && String(prior[1].versionId) !== String(v.id))),
     };
     store.saveManifest();
     return filename;
@@ -514,12 +552,23 @@ async function list(ctx, type) {
   const entries = store.instance(inst.id) ? store.entries(inst.id) : {};
   await nameAdopted(ctx, files.map((f) => entries[f.key]).filter(Boolean));
   const label = (f) => { const e = entries[f.key]; return (e && !e.unknown && e.title) || f.name; };
+  // In an instance made from a modpack: where each file came from. 'pack' for what the pack
+  // brought, 'added' for what the person put in, 'updated' for a pack mod they moved to
+  // another file. A file the pack's own list does not have counts as added, even when it is
+  // not recognised (dropped into the folder by hand).
+  const origin = (f) => {
+    if (!inst.fromPack) return '';
+    const e = entries[f.key], m = e && !e.unknown && e.projectId ? e : null;
+    if (m && m.added) return 'added';
+    if (m && m.updated) return 'updated';
+    return inPack(store, inst, f.key) === false ? 'added' : 'pack';
+  };
   return {
     dir,
     files: files
       .map((f) => {
         const e = entries[f.key];
-        return { file: f.file, name: f.name, enabled: f.enabled, size: f.size, meta: e && !e.unknown && e.projectId ? e : null, sort: label(f) };
+        return { file: f.file, name: f.name, enabled: f.enabled, size: f.size, meta: e && !e.unknown && e.projectId ? e : null, origin: origin(f), sort: label(f) };
       })
       .sort((a, b) => a.sort.localeCompare(b.sort, undefined, { sensitivity: 'base' }) || a.file.localeCompare(b.file))
       .map(({ sort, ...f }) => f),
@@ -618,4 +667,4 @@ function installedIds(store) {
   return out;
 }
 
-module.exports = { download, install, adoptFile, nameAdopted, activeInstance, saveTo, list, updates, toggle, remove, installedIds, discardPartials, FOLDER };
+module.exports = { exclusive, inPack, download, install, adoptFile, nameAdopted, activeInstance, saveTo, list, updates, toggle, remove, installedIds, discardPartials, FOLDER };

@@ -99,9 +99,21 @@ async function versionJson(gameVersion) {
   return json;
 }
 
-async function loaderProfile(loader, gameVersion) {
+// The builds of a loader that exist for a game version, newest first: [{ version, recommended, stable }].
+async function loaderBuilds(loader, gameVersion) {
+  if (Object.hasOwn(PRISM_LOADERS, loader)) return launcher.loaderBuilds(loader, gameVersion);
+  const meta = LOADER_META[loader];
+  if (!meta) throw new ApiError('Unknown mod loader.', 'BAD_REQUEST');
+  const builds = arr(await getJson(`${meta.base}/${encodeURIComponent(gameVersion)}`)).filter((b) => b && b.loader && typeof b.loader.version === 'string');
+  if (!builds.length) throw new ApiError(`${meta.name} is not available for Minecraft ${gameVersion}.`, 'NO_LOADER_VERSION');
+  const firstStable = builds.find((b) => b.loader.stable) || builds.find((b) => !/beta|alpha|rc/i.test(b.loader.version)) || builds[0];
+  return builds.map((b) => ({ version: b.loader.version, recommended: b === firstStable, stable: Boolean(b.loader.stable) || !/beta|alpha|rc/i.test(b.loader.version) }));
+}
+
+// `loaderVersion` is the build the instance asks for; where it does not exist the usual pick is used.
+async function loaderProfile(loader, gameVersion, loaderVersion) {
   if (Object.hasOwn(PRISM_LOADERS, loader)) {
-    const version = await launcher.loaderBuild(loader, gameVersion);
+    const version = await launcher.loaderBuild(loader, gameVersion, loaderVersion);
     const meta = await launcher.loaderMeta(loader, version);
     if (!meta || typeof meta !== 'object') throw new ApiError(`${PRISM_LOADERS[loader]} ${version} has no usable description.`, 'BAD_REPLY');
     return {
@@ -123,7 +135,8 @@ async function loaderProfile(loader, gameVersion) {
   }
   const meta = LOADER_META[loader];
   const builds = arr(await getJson(`${meta.base}/${encodeURIComponent(gameVersion)}`)).filter((b) => b && b.loader && b.loader.version);
-  const pick = builds.find((b) => b.loader.stable) || builds.find((b) => !/beta|alpha|rc/i.test(b.loader.version)) || builds[0];
+  const pick = builds.find((b) => loaderVersion && b.loader.version === loaderVersion)
+    || builds.find((b) => b.loader.stable) || builds.find((b) => !/beta|alpha|rc/i.test(b.loader.version)) || builds[0];
   if (!pick) throw new ApiError(`${meta.name} is not available for Minecraft ${gameVersion}.`, 'NO_LOADER_VERSION');
   return getJson(`${meta.base}/${encodeURIComponent(gameVersion)}/${encodeURIComponent(pick.loader.version)}/profile/json`);
 }
@@ -350,7 +363,7 @@ async function prepare(inst, progress) {
   if ((!game.arguments && typeof game.minecraftArguments !== 'string') || !game.downloads || !game.downloads.client || !game.assetIndex) {
     throw new ApiError(`Mojang's description of Minecraft ${inst.gameVersion} is not one Modion can start.`, 'UNSUPPORTED');
   }
-  const profile = inst.loader ? await loaderProfile(inst.loader, inst.gameVersion) : null;
+  const profile = inst.loader ? await loaderProfile(inst.loader, inst.gameVersion, inst.loaderVersion) : null;
 
   const libDir = path.join(ROOT, 'libraries');
   const libs = new Map(); // "group:artifact[:classifier]" -> item; the loader's choice of a library wins
@@ -682,4 +695,4 @@ function offlineSession(name) {
   return { name, uuid: h.toString('hex'), token: '0', offline: true };
 }
 
-module.exports = { splitArgs, parseEnv, setsMemory, defaultMemory, wantedJava, supports, launch, inUse, isLive, onChange, track, stop, outputLog, offlineSession, fetchAll, versionJson, ROOT };
+module.exports = { splitArgs, parseEnv, setsMemory, defaultMemory, wantedJava, supports, launch, inUse, isLive, onChange, track, stop, outputLog, offlineSession, fetchAll, versionJson, loaderBuilds, ROOT };
