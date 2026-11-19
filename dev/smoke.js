@@ -1221,17 +1221,22 @@ require('../main.js').ready.then(async (win) => {
       cf.identify = async (prints) => Object.fromEntries(prints.slice(0, 1).map((p) => [p, { source: 'curseforge', projectId: '4242', versionId: '9', versionName: '1.0', title: 'Only On CurseForge', icon: null }]));
       fs.writeFileSync(path.join(inst.path, 'mods', 'cf-only.jar'), 'curseforge only ' + Date.now());
       await js(`api('config.get').then(setConfig); updateCache.clear(); S.library.type = 'mod'; S.library.source = ''; S.library.origin = ''; go('browse'); go('library')`);
-      await waitFor(`document.querySelectorAll('#view .list .row').length === 3`, 'three rows');
+      // Mod Menu brings what it needs (Fabric API), which came with "the pack" as well.
+      const titles = `[...document.querySelectorAll('#view .list .row')].map(r => r.querySelector('.row-title').textContent)`;
+      await waitFor(`${titles}.includes('Only On CurseForge')`, 'the library');
       await sleep(500);
       fs.writeFileSync(path.join(inst.path, 'mods', 'handmade.jar'), 'nobody knows ' + Date.now());
       await js(`go('browse'); go('library')`);
-      await waitFor(`document.querySelectorAll('#view .list .row').length === 4`, 'four rows');
+      await waitFor(`${titles}.includes('handmade.jar')`, 'the hand-made file');
+      const total = await js(`${titles}.length`);
+      const deps = (await js(`${titles}`)).filter((t) => !['Mod Menu', 'Sodium', 'Only On CurseForge', 'handmade.jar'].includes(t));
       const shown = () => js(`[...document.querySelectorAll('#view .list .row')].filter(r => !r.hidden).map(r => r.querySelector('.row-title').textContent).sort().join()`);
+      const plus = (...names) => [...names, ...deps].sort().join();
       const pick = (nth, value) => js(`(() => { const s = document.querySelectorAll('#view .bar select')[${nth}]; s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change')); })()`);
       expect(await js(`document.querySelectorAll('#view .bar select').length`) === 2, 'a modpack instance should have both filters');
       await shot('34-library-filters');
       await pick(0, 'modrinth');
-      expect(await shown() === 'Mod Menu,Sodium', `Modrinth only: ${await shown()}`);
+      expect(await shown() === plus('Mod Menu', 'Sodium'), `Modrinth only: ${await shown()}`);
       await pick(0, 'curseforge');
       expect(await shown() === 'Only On CurseForge', `CurseForge only: ${await shown()}`);
       await pick(0, 'unknown');
@@ -1242,14 +1247,14 @@ require('../main.js').ready.then(async (win) => {
       await pick(1, 'updated');
       expect(await shown() === 'Mod Menu', `updated by you: ${await shown()}`);
       await pick(1, 'pack');
-      expect(await shown() === 'Only On CurseForge,handmade.jar', `from the pack: ${await shown()}`);
+      expect(await shown() === plus('Only On CurseForge', 'handmade.jar'), `from the pack: ${await shown()}`);
       // Both filters and the search together; the count says how many are shown.
       await pick(0, 'modrinth'); await pick(1, 'added');
-      expect(await shown() === 'Sodium' && /^1 of 4 files/.test(await js(`document.querySelector('#view .bar .dim').textContent`)), `filters together: ${await shown()}`);
+      expect(await shown() === 'Sodium' && new RegExp(`^1 of ${total} files`).test(await js(`document.querySelector('#view .bar .dim').textContent`)), `filters together: ${await shown()}`);
       await pick(1, 'pack');
       expect(await shown() === '' && await js(`!document.querySelector('#view .list .empty').hidden`), 'no note when nothing matches the filters');
       await pick(0, ''); await pick(1, '');
-      expect(await js(`document.querySelectorAll('#view .list .row').length`) === 4 && (await shown()).split(',').length === 4, 'clearing the filters did not bring everything back');
+      expect((await shown()).split(',').length === total, 'clearing the filters did not bring everything back');
       // The tags.
       const tags = await js(`Object.fromEntries([...document.querySelectorAll('#view .list .row')].map(r => [r.querySelector('.row-title').textContent, [...r.querySelectorAll('.added-note, .updated-note')].map(t => t.className + ':' + t.textContent).join()]))`);
       expect(tags['Mod Menu'] === 'updated-note:Updated by you' && tags['Sodium'] === 'added-note:Added by you' && !tags['Only On CurseForge'], `tags: ${JSON.stringify(tags)}`);
@@ -1260,7 +1265,7 @@ require('../main.js').ready.then(async (win) => {
       // A plain instance has no "who" filter.
       await callApi('instances.setSettings', { id: inst.id, fromPack: false, java: '', jvmArgs: '', env: '', memory: null });
       await js(`api('config.get').then(setConfig); go('browse'); go('library')`);
-      await waitFor(`document.querySelectorAll('#view .list .row').length === 4`, 'rows again');
+      await waitFor(`document.querySelectorAll('#view .list .row').length === ${total}`, 'rows again');
       expect(await js(`document.querySelectorAll('#view .bar select').length`) === 1 && !(await js(`Boolean(document.querySelector('#view .updated-note, #view .added-note'))`)), 'a plain instance shows modpack filters or tags');
     } finally {
       Object.assign(cf, real);
